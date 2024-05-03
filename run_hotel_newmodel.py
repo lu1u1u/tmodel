@@ -508,7 +508,7 @@ def main():
             attention_mask_enc = encres['attention_mask']
             
             labels_enc = [
-                [-100 if i == thoid or i == tokenizer.pad_token_id else i for i in j] 
+                [-100 if i in tholist or i == tokenizer.pad_token_id else i for i in j] 
                 for j in input_ids_enc
             ]
 
