@@ -2,7 +2,7 @@ export PATH=/yinyongjing/anaconda3/bin/:$PATH
 #export CPATH=/usr/local/cuda/include:$CPATH
 
 modelpath=/yinyongjing/hfmodels/gpt2/medium
-largepath=/yinyongjing/hfmodels/gpt2/large
+
 
 scrip_dir=/yinyongjing/junran/cgae
 export OMP_NUM_THREADS=1
