@@ -315,7 +315,7 @@ def main():
         
         
         for str in examples['text']:
-                
+            str = tokenizer.bos_token + str    
             split_token = default_spt
             choices = [default_spt, ',', '!', '?', ';', '，', '。', '、', '！','？','END']
                
