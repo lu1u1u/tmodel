@@ -30,7 +30,7 @@ import pickle
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import Optional
-
+from copy import deepcopy
 import datasets
 import evaluate
 import torch
@@ -354,9 +354,8 @@ def main():
         
         for str in examples['text']:
                 
-            # first add bos   
-            # now dont 
-            #str = tokenizer.bos_token + str
+            # first add bos and eos
+            str = tokenizer.bos_token + str + tokenizer.eos_token
             # handle split
             split_token = default_spt
             choices = [default_spt, ',', '!', '?', ';', '，', '。', '、', '！','？','END']
@@ -378,7 +377,7 @@ def main():
                 print(decstr,'Unexpected occurred')
                 decstr = list(decstr[0])
                 
-            where_to_add = math.floor(len(decstr) / 4) 
+            where_to_add = min(math.floor(len(decstr) / 4),1) 
 
             encstr = split_token.join(decstr[where_to_add+1:])
         
@@ -431,7 +430,7 @@ def main():
         remove_columns='text',
         batched=True,
         num_proc=8
-    )
+    )       
     print(raw_datasets)
 
     if training_args.do_train:
@@ -740,7 +739,7 @@ def main():
 
     # Evaluation
     if training_args.do_eval:
-        trainer.compute_metrics = compute_metrics_afterall
+       
         
         logger.info("*** Evaluate ***")
 
@@ -756,20 +755,22 @@ def main():
 
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
+        
+        
+    if training_args.do_train:
+        kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-generation"}
+        if data_args.dataset_name is not None:
+            kwargs["dataset_tags"] = data_args.dataset_name
+            if data_args.dataset_config_name is not None:
+                kwargs["dataset_args"] = data_args.dataset_config_name
+                kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
+            else:
+                kwargs["dataset"] = data_args.dataset_name
 
-    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-generation"}
-    if data_args.dataset_name is not None:
-        kwargs["dataset_tags"] = data_args.dataset_name
-        if data_args.dataset_config_name is not None:
-            kwargs["dataset_args"] = data_args.dataset_config_name
-            kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
+        if training_args.push_to_hub:
+            trainer.push_to_hub(**kwargs)
         else:
-            kwargs["dataset"] = data_args.dataset_name
-
-    if training_args.push_to_hub:
-        trainer.push_to_hub(**kwargs)
-    else:
-        trainer.create_model_card(**kwargs)
+            trainer.create_model_card(**kwargs)
 
 
 def _mp_fn(index):
