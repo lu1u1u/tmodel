@@ -576,11 +576,11 @@ class AE(GPT2LMHeadModel):
         self.cross_attention.q_attn.weight.data.normal_(mean=0.0, std=1.0)
         
         self.ln_1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
-        self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        # self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.ln_1.bias.data.zero_()
         self.ln_1.weight.data.fill_(1.0)
-        self.ln_2.bias.data.zero_()
-        self.ln_2.weight.data.fill_(1.0)
+        # self.ln_2.bias.data.zero_()
+        # self.ln_2.weight.data.fill_(1.0)
         
         self.prefix_encoder = PrefixEncoder(config, model_args)
         self.proj = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
@@ -662,7 +662,7 @@ class AE(GPT2LMHeadModel):
         )
         
         hidden_z = cross_outs[0] + residual
-        hidden_z = self.ln_2(hidden_z)
+        # hidden_z = self.ln_2(hidden_z)
         hidden_z = self.proj(hidden_z)
         
         past_key_values = self.prefix_encoder(hidden_z)
