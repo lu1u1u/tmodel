@@ -1,6 +1,7 @@
 import math
 import os
 import warnings
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
@@ -79,7 +80,7 @@ class PrefixEncoder(nn.Module):
         self,
         input_embd
     ):
-
+        
         batch_size = input_embd.size(0)
 
         past_key_values = self.prefix_mlp(input_embd)
@@ -112,6 +113,7 @@ class PrefixEncoder(nn.Module):
         #print(f"len all_kvs[0]: {type(all_kvs[0]),len(all_kvs[0])}")
         #print(f"shape of k/v : {type(all_kvs[0][0]), all_kvs[0][0].shape, all_kvs[0][1].shape}")
         #assert 0
+
         return all_kvs
 
 
@@ -568,7 +570,6 @@ class AE(GPT2LMHeadModel):
         self.shallow_decoder_config.n_layer = model_args.shallow_decoder_n_layer
         
         self.decoder = AEDecoder(self.shallow_decoder_config)
-        self.encoder = GPT2Model(config)
         
         self.cross_attention = GPT2Attention(config, is_cross_attention=True)
         self.ln_1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
@@ -577,18 +578,9 @@ class AE(GPT2LMHeadModel):
         self.prefix_encoder = PrefixEncoder(config, model_args)
         self.proj = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
         
-    #def disable_decoder_grad_except_layers(self):
-    #    self.decoder.transformer.wte.requires_grad_(False)
-    #    self.decoder.transformer.wpe.requires_grad_(False)
-    #    self.decoder.lm_head.requires_grad_(False)
-        
-    #def resume_main_decoder_grad(self):
-    #    self.decoder.transformer.wte.requires_grad_(True)
-    #    self.decoder.transformer.wpe.requires_grad_(True)
-    #    self.decoder.lm_head.requires_grad_(True)
         
     def build_ed(self, model_args, main_decoder):
-        self.decoder = AutoModel.from_pretrained(
+        self.decoder = AEDecoder.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
             config=self.shallow_decoder_config
@@ -599,21 +591,21 @@ class AE(GPT2LMHeadModel):
         new_vocab_size = main_decoder.transformer.wte.weight.size(0)
         
         self.decoder.resize_token_embeddings(new_vocab_size)
-        self.encoder.resize_token_embeddings(new_vocab_size)
+        self.transformer.resize_token_embeddings(new_vocab_size)
                
         self.decoder.wte = main_decoder.transformer.wte
         self.decoder.wpe = main_decoder.transformer.wpe
         self.lm_head = main_decoder.lm_head
         
-        self.encoder.wte = main_decoder.transformer.wte
-        self.encoder.wpe = main_decoder.transformer.wpe
-        assert len(self.encoder.h) == len(main_decoder.transformer.h)
-        self.encoder.h = main_decoder.transformer.h
-        self.encoder.drop = main_decoder.transformer.drop
-        self.encoder.ln_f = main_decoder.transformer.ln_f
+        self.transformer.wte = main_decoder.transformer.wte
+        self.transformer.wpe = main_decoder.transformer.wpe
+        assert len(self.transformer.h) == len(main_decoder.transformer.h)
+        self.transformer.h = main_decoder.transformer.h
+        self.transformer.drop = main_decoder.transformer.drop
+        self.transformer.ln_f = main_decoder.transformer.ln_f
         
-        self.zwte = nn.Embedding(self.encoder.config.vocab_size, self.encoder.embed_dim)
-        self.zwpe = nn.Embedding(self.encoder.config.max_position_embeddings, self.encoder.embed_dim)
+        self.zwte = nn.Embedding(self.transformer.config.vocab_size, self.transformer.embed_dim)
+        self.zwpe = nn.Embedding(self.transformer.config.max_position_embeddings, self.transformer.embed_dim)
     
     def forward(
         self,
@@ -632,12 +624,15 @@ class AE(GPT2LMHeadModel):
         position_embeds_z = self.zwpe(position_ids_z)
         hidden_states_z = inputs_embeds_z + position_embeds_z
         
+
         with torch.no_grad():
-            enc_outs = self.encoder(
+            enc_outs = self.transformer(
                 input_ids = input_ids_enc,
                 attention_mask = attention_mask_enc
             )
-            
+
+
+        
         attention_mask_enc_4d = attention_mask_enc.view(input_ids_enc.size(0), -1)
         attention_mask_enc_4d = attention_mask_enc_4d[:, None, None, :]
 
@@ -663,6 +658,7 @@ class AE(GPT2LMHeadModel):
         
         past_key_values = self.prefix_encoder(hidden_z)
         
+
         dec_outs = self.decoder(
             input_ids = input_ids_enc,
             past_key_values = past_key_values,
@@ -670,6 +666,7 @@ class AE(GPT2LMHeadModel):
             output_hidden_states = True,
             output_attentions = False
         )
+
         lhs = dec_outs.last_hidden_state 
             
         
@@ -756,9 +753,9 @@ class NewTModel(GPT2PreTrainedModel):
             if device_map is None
             else device_map
         )
-        assert_device_map(self.device_map, len(self.encoder.h))
+        assert_device_map(self.device_map, len(self.aemodel.transformer.h))
         self.main_decoder.parallelize(self.device_map)
-        self.aemodel.encoder.parallelize(self.device_map)
+        self.aemodel.transformer.parallelize(self.device_map)
         self.aemodel.decoder.parallelize(self.device_map)
         self.first_device = self.main_decoder.first_device
         self.model_parallel = True
@@ -811,7 +808,7 @@ class NewTModel(GPT2PreTrainedModel):
     ):
 
         bs = input_ids.size(0)
-        
+
         main_dec_outs = self.main_decoder(
             input_ids = input_ids, 
             labels = labels,
@@ -819,7 +816,7 @@ class NewTModel(GPT2PreTrainedModel):
             output_hidden_states = True,
             output_attentions = True
         )
-        
+
 
         main_dec_lhs = main_dec_outs.hidden_states[-1] # bs seqlen h
         #'CausalLMOutputWithCrossAttentions' object has no attribute 'last_hidden_state' 
@@ -835,6 +832,7 @@ class NewTModel(GPT2PreTrainedModel):
             attention_mask_enc_z = attention_mask_enc_z, 
             labels_enc = labels_enc
         )
+
         #print(main_hidden_z.shape, ae_outs.hidden_z.shape)
         mseloss = self.mseloss(main_hidden_z, ae_outs.hidden_z.reshape(-1, ae_outs.hidden_z.size(-1)).detach())
         recloss = ae_outs.loss
