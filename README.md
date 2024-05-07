@@ -31,8 +31,8 @@ topp=1.0
 beams=4
 temperature=1.0  # 生成参数
 
-ztokens=${1} # 需要填下，处理测试集需要用到 
-desc=xxx 
+ztokens=${1} # 需要根据ckp填下，处理测试集需要用
+desc=xxx  # 需要根据ckp填下，log的名字
 modelpath=xxx # 这里填微调的ckp路径
 
 trainf=xxx # review.csv
