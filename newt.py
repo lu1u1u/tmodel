@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 import random
 
-from scipy.optimize import linear_sum_assignment
 
 import torch
 import torch.utils.checkpoint
@@ -417,21 +416,26 @@ class AEDecoder(GPT2Model):
         if attention_mask is not None:
             if batch_size <= 0:
                 raise ValueError("batch_size has to be defined and > 0")
+            
             attention_mask = attention_mask.view(batch_size, -1)
-            # We create a 3D attention mask from a 2D tensor mask.
-            # Sizes are [batch_size, 1, 1, to_seq_length]
-            # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
-            # this attention mask is more simple than the triangular masking of causal attention
-            # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
-            attention_mask = attention_mask[:, None, None, :]
+            
+            if self._attn_implementation == "flash_attention_2":
+                attention_mask = attention_mask if 0 in attention_mask else None
+            else:
+                # We create a 3D attention mask from a 2D tensor mask.
+                # Sizes are [batch_size, 1, 1, to_seq_length]
+                # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
+                # this attention mask is more simple than the triangular masking of causal attention
+                # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
+                attention_mask = attention_mask[:, None, None, :]
 
-            # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
-            # masked positions, this operation will create a tensor which is 0.0 for
-            # positions we want to attend and the dtype's smallest value for masked positions.
-            # Since we are adding it to the raw scores before the softmax, this is
-            # effectively the same as removing these entirely.
-            attention_mask = attention_mask.to(dtype=self.dtype)  # fp16 compatibility
-            attention_mask = (1.0 - attention_mask) * torch.finfo(self.dtype).min
+                # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
+                # masked positions, this operation will create a tensor which is 0.0 for
+                # positions we want to attend and the dtype's smallest value for masked positions.
+                # Since we are adding it to the raw scores before the softmax, this is
+                # effectively the same as removing these entirely.
+                attention_mask = attention_mask.to(dtype=self.dtype)  # fp16 compatibility
+                attention_mask = (1.0 - attention_mask) * torch.finfo(self.dtype).min
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
@@ -590,7 +594,8 @@ class AE(GPT2LMHeadModel):
         self.decoder = AEDecoder.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=self.shallow_decoder_config
+            config=self.shallow_decoder_config,
+            use_flash_attention_2=True
         )
         print(self.shallow_decoder_config)
         print(self.decoder)
@@ -598,18 +603,19 @@ class AE(GPT2LMHeadModel):
         new_vocab_size = main_decoder.transformer.wte.weight.size(0)
         
         self.decoder.resize_token_embeddings(new_vocab_size)
-        self.transformer.resize_token_embeddings(new_vocab_size)
+        # self.transformer.resize_token_embeddings(new_vocab_size)
                
         self.decoder.wte = main_decoder.transformer.wte
         self.decoder.wpe = main_decoder.transformer.wpe
         self.lm_head = main_decoder.lm_head
         
-        self.transformer.wte = main_decoder.transformer.wte
-        self.transformer.wpe = main_decoder.transformer.wpe
-        assert len(self.transformer.h) == len(main_decoder.transformer.h)
-        self.transformer.h = main_decoder.transformer.h
-        self.transformer.drop = main_decoder.transformer.drop
-        self.transformer.ln_f = main_decoder.transformer.ln_f
+        self.transformer = main_decoder.transformer
+        # self.transformer.wte = main_decoder.transformer.wte
+        # self.transformer.wpe = main_decoder.transformer.wpe
+        # assert len(self.transformer.h) == len(main_decoder.transformer.h)
+        # self.transformer.h = main_decoder.transformer.h
+        # self.transformer.drop = main_decoder.transformer.drop
+        # self.transformer.ln_f = main_decoder.transformer.ln_f
         
         self.zwte = nn.Embedding(self.transformer.config.vocab_size, self.transformer.embed_dim)
         self.zwpe = nn.Embedding(self.transformer.config.max_position_embeddings, self.transformer.embed_dim)
@@ -635,13 +641,13 @@ class AE(GPT2LMHeadModel):
         
 
         with torch.no_grad():
+            # print(input_ids_enc.shape, attention_mask_enc.shape)
+            # exit()
             enc_outs = self.transformer(
                 input_ids = input_ids_enc,
                 attention_mask = attention_mask_enc
             )
 
-
-        
         attention_mask_enc_4d = attention_mask_enc.view(input_ids_enc.size(0), -1)
         attention_mask_enc_4d = attention_mask_enc_4d[:, None, None, :]
 
@@ -676,8 +682,7 @@ class AE(GPT2LMHeadModel):
             output_attentions = False
         )
 
-        lhs = dec_outs.last_hidden_state 
-            
+        lhs = dec_outs.last_hidden_state
         
         lm_logits = self.lm_head(lhs)
             
@@ -748,13 +753,13 @@ class NewTModel(GPT2PreTrainedModel):
         self.main_decoder = AutoModelForCausalLM.from_pretrained(
             self.model_args.model_name_or_path,
             from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
-            config=self.config
+            config=self.config,
+            use_flash_attention_2=True
         )
         self.resize_token_embeddings(len_tokenizer)
         self.aemodel.build_ed(self.model_args, self.main_decoder)
-        
-        
-        
+
+
     # DELLA
     def parallelize(self, device_map=None):
         self.device_map = (
@@ -830,7 +835,6 @@ class NewTModel(GPT2PreTrainedModel):
         main_dec_lhs = main_dec_outs.hidden_states[-1] # bs seqlen h
         #'CausalLMOutputWithCrossAttentions' object has no attribute 'last_hidden_state' 
 
-            
         main_hidden_z = main_dec_lhs[pos_mask]
         main_hidden_z = self.proj(main_hidden_z)
         
@@ -843,7 +847,8 @@ class NewTModel(GPT2PreTrainedModel):
         )
 
         #print(main_hidden_z.shape, ae_outs.hidden_z.shape)
-        mseloss = self.mseloss(main_hidden_z, ae_outs.hidden_z.reshape(-1, ae_outs.hidden_z.size(-1)).detach())
+        mseloss = self.mseloss(main_hidden_z.float(), ae_outs.hidden_z.reshape(-1, ae_outs.hidden_z.size(-1)).detach().float())
+
         recloss = ae_outs.loss
         nllloss = main_dec_outs.loss
         
