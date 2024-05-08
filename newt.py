@@ -1,5 +1,20 @@
+from transformers import (
+    AutoModel,
+    PreTrainedModel,
+    GPT2PreTrainedModel,
+    AutoModelForCausalLM
+)
+from transformers.utils import (
+    ModelOutput,
+    add_code_sample_docstrings,
+    add_start_docstrings,
+    add_start_docstrings_to_model_forward,
+    logging,
+    replace_return_docstrings,
+)
 import math
 import os
+from re import S
 import warnings
 import time
 from copy import deepcopy
@@ -23,30 +38,6 @@ from transformers.utils.model_parallel_utils import assert_device_map, get_devic
 from transformers.modeling_outputs import (
     CausalLMOutput,
 )
-@dataclass
-class AEOutput(ModelOutput):
- 
-    loss: Optional[torch.FloatTensor] = None
-    logits: torch.FloatTensor = None
-    hidden_z : torch.FloatTensor = None
-    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-    attentions: Optional[Tuple[torch.FloatTensor]] = None
-    
-from transformers import (
-    AutoModel,
-    PreTrainedModel, 
-    GPT2PreTrainedModel, 
-    AutoModelForCausalLM
-)
-
-from transformers.utils import (
-    ModelOutput,
-    add_code_sample_docstrings,
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    logging,
-    replace_return_docstrings,
-)
 
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
@@ -57,7 +48,19 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 
+
+@dataclass
+class AEOutput(ModelOutput):
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    hidden_z: torch.FloatTensor = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
+
+
 logger = logging.get_logger(__name__)
+
 
 class PrefixEncoder(nn.Module):
     def __init__(self, config, model_args):
@@ -68,9 +71,9 @@ class PrefixEncoder(nn.Module):
 
         self.prefix_seq_len = model_args.ztokens
         self.match_n_layer = model_args.shallow_decoder_n_layer
-        
-        self.prefix_mlp = nn.Linear(self.input_dim, self.match_n_layer * 2 * config.n_embd)
 
+        self.prefix_mlp = nn.Linear(
+            self.input_dim, self.match_n_layer * 2 * config.n_embd)
 
         self.match_n_head = config.n_head
         self.match_n_embd = config.n_embd // config.n_head
@@ -79,14 +82,13 @@ class PrefixEncoder(nn.Module):
         self,
         input_embd
     ):
-        
+
         batch_size = input_embd.size(0)
 
         past_key_values = self.prefix_mlp(input_embd)
 
-        past_key_values = past_key_values.view(batch_size, self.prefix_seq_len, self.match_n_layer, -1)
-
-
+        past_key_values = past_key_values.view(
+            batch_size, self.prefix_seq_len, self.match_n_layer, -1)
 
         # Resize
         past_key_values = past_key_values.view(
@@ -97,48 +99,46 @@ class PrefixEncoder(nn.Module):
             self.match_n_embd,
         )
 
-        
         # Transpose -> [match_n_layer*2, batch_size, match_n_head, prefix_seq_len, match_n_embd]
         past_key_values = past_key_values.permute([2, 0, 3, 1, 4])
         past_key_values = torch.split(past_key_values, 2)
-        
+
         all_kvs = ()
         for i in range(len(past_key_values)):
             kvpair = (past_key_values[i][0], past_key_values[i][1])
             all_kvs += (kvpair,)
-        #print("finally:")
-        #print(all_kvs[0][0])
-        #print(f"len all_kvs: {type(all_kvs), len(all_kvs)}")
-        #print(f"len all_kvs[0]: {type(all_kvs[0]),len(all_kvs[0])}")
-        #print(f"shape of k/v : {type(all_kvs[0][0]), all_kvs[0][0].shape, all_kvs[0][1].shape}")
-        #assert 0
+        # print("finally:")
+        # print(all_kvs[0][0])
+        # print(f"len all_kvs: {type(all_kvs), len(all_kvs)}")
+        # print(f"len all_kvs[0]: {type(all_kvs[0]),len(all_kvs[0])}")
+        # print(f"shape of k/v : {type(all_kvs[0][0]), all_kvs[0][0].shape, all_kvs[0][1].shape}")
+        # assert 0
 
         return all_kvs
 
-
-    
 
 class AEEncoder(GPT2Model):
     def __init__(self, config, model_args):
         super().__init__(config)
         self.embed_dim = config.hidden_size
         self.zwte = nn.Embedding(config.vocab_size, self.embed_dim)
-        self.zwpe = nn.Embedding(config.max_position_embeddings, self.embed_dim)
-        
+        self.zwpe = nn.Embedding(
+            config.max_position_embeddings, self.embed_dim)
+
     def disable_grad_except_z(self):
         self.requires_grad_(False)
         self.zwte.requires_grad_(True)
         self.zwpe.requires_grad_(True)
-        
+
     def resume_main_decoder_grad(self):
         self.requires_grad_(True)
-        
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
-        input_ids_z : Optional[torch.LongTensor] = None, # added
+        input_ids_z: Optional[torch.LongTensor] = None,  # added
         token_type_ids: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
@@ -150,8 +150,8 @@ class AEEncoder(GPT2Model):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPastAndCrossAttentions]:
-        #self.disable_grad_except_z() # added
-        
+        # self.disable_grad_except_z() # added
+
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -160,7 +160,8 @@ class AEEncoder(GPT2Model):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+            raise ValueError(
+                "You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
             input_shape = input_ids.size()
             input_ids = input_ids.view(-1, input_shape[-1])
@@ -169,7 +170,8 @@ class AEEncoder(GPT2Model):
             input_shape = inputs_embeds.size()[:-1]
             batch_size = inputs_embeds.shape[0]
         else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
+            raise ValueError(
+                "You have to specify either input_ids or inputs_embeds")
 
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
@@ -184,13 +186,10 @@ class AEEncoder(GPT2Model):
         else:
             past_length = past_key_values[0][0].size(-2)
         if position_ids is None:
-            position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
+            position_ids = torch.arange(
+                past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
             position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
 
-
-        
-        
-        
         if attention_mask is not None:
             if batch_size <= 0:
                 raise ValueError("batch_size has to be defined and > 0")
@@ -207,21 +206,26 @@ class AEEncoder(GPT2Model):
             # positions we want to attend and the dtype's smallest value for masked positions.
             # Since we are adding it to the raw scores before the softmax, this is
             # effectively the same as removing these entirely.
-            attention_mask = attention_mask.to(dtype=self.dtype)  # fp16 compatibility
-            attention_mask = (1.0 - attention_mask) * torch.finfo(self.dtype).min
-        
-        #torch.set_printoptions(profile='full', precision=5)
-        #print(attention_mask)
-        #assert 0, 'ckp1'
-        
+            attention_mask = attention_mask.to(
+                dtype=self.dtype)  # fp16 compatibility
+            attention_mask = (1.0 - attention_mask) * \
+                torch.finfo(self.dtype).min
+
+        # torch.set_printoptions(profile='full', precision=5)
+        # print(attention_mask)
+        # assert 0, 'ckp1'
+
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
         if self.config.add_cross_attention and encoder_hidden_states is not None:
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
-            encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
+            encoder_hidden_shape = (
+                encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)
-            encoder_attention_mask = self.invert_attention_mask(encoder_attention_mask)
+                encoder_attention_mask = torch.ones(
+                    encoder_hidden_shape, device=device)
+            encoder_attention_mask = self.invert_attention_mask(
+                encoder_attention_mask)
         else:
             encoder_attention_mask = None
 
@@ -238,31 +242,33 @@ class AEEncoder(GPT2Model):
 
         hidden_states = inputs_embeds
 
-        # for z:        
+        # for z:
         input_shape_z = input_ids_z.size()
         input_ids_z = input_ids_z.view(-1, input_shape_z[-1])
-        position_ids_z = torch.arange(0, input_shape_z[-1], dtype=torch.long, device=device)
-        position_ids_z = position_ids_z.unsqueeze(0).view(-1, input_shape_z[-1])
+        position_ids_z = torch.arange(
+            0, input_shape_z[-1], dtype=torch.long, device=device)
+        position_ids_z = position_ids_z.unsqueeze(
+            0).view(-1, input_shape_z[-1])
         inputs_embeds_z = self.zwte(input_ids_z)
         position_embeds_z = self.zwpe(position_ids_z)
         hidden_states_z = inputs_embeds_z + position_embeds_z
-    
+
         hidden_states = torch.cat((hidden_states, hidden_states_z), dim=-2)
 
         if token_type_ids is not None:
             token_type_embeds = self.wte(token_type_ids)
             hidden_states = hidden_states + token_type_embeds
-        
+
         hidden_states = self.drop(hidden_states)
 
         output_shape = torch.Size((input_shape[0], input_shape[1] + input_shape_z[1]))\
-                    + (hidden_states.size(-1),)
-       
-        #print(hidden_states)
-        #print(attention_mask)
-        #print(output_shape)
-        #assert 0 
-        
+            + (hidden_states.size(-1),)
+
+        # print(hidden_states)
+        # print(attention_mask)
+        # print(output_shape)
+        # assert 0
+
         if self.gradient_checkpointing and self.training:
             if use_cache:
                 logger.warning_once(
@@ -280,7 +286,8 @@ class AEEncoder(GPT2Model):
                 torch.cuda.set_device(hidden_states.device)
                 # Ensure layer_past is on same device as hidden_states (might not be correct)
                 if layer_past is not None:
-                    layer_past = tuple(past_state.to(hidden_states.device) for past_state in layer_past)
+                    layer_past = tuple(past_state.to(hidden_states.device)
+                                       for past_state in layer_past)
                 # Ensure that attention_mask is always on the same device as hidden_states
                 if attention_mask is not None:
                     attention_mask = attention_mask.to(hidden_states.device)
@@ -324,9 +331,11 @@ class AEEncoder(GPT2Model):
                 presents = presents + (outputs[1],)
 
             if output_attentions:
-                all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
+                all_self_attentions = all_self_attentions + \
+                    (outputs[2 if use_cache else 1],)
                 if self.config.add_cross_attention:
-                    all_cross_attentions = all_cross_attentions + (outputs[3 if use_cache else 2],)
+                    all_cross_attentions = all_cross_attentions + \
+                        (outputs[3 if use_cache else 2],)
 
             # Model Parallel: If it's the last layer for that device, put things on the next device
             if self.model_parallel:
@@ -347,9 +356,9 @@ class AEEncoder(GPT2Model):
                 for v in [hidden_states, presents, all_hidden_states, all_self_attentions, all_cross_attentions]
                 if v is not None
             )
-        
-        #self.resume_main_decoder_grad() # added
-        
+
+        # self.resume_main_decoder_grad() # added
+
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             past_key_values=presents,
@@ -358,9 +367,11 @@ class AEEncoder(GPT2Model):
             cross_attentions=all_cross_attentions,
         )
 
+
 class AEDecoder(GPT2Model):
     def __init__(self, config):
         super().__init__(config)
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -385,7 +396,8 @@ class AEDecoder(GPT2Model):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+            raise ValueError(
+                "You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
             input_shape = input_ids.size()
             input_ids = input_ids.view(-1, input_shape[-1])
@@ -394,7 +406,8 @@ class AEDecoder(GPT2Model):
             input_shape = inputs_embeds.size()[:-1]
             batch_size = inputs_embeds.shape[0]
         else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
+            raise ValueError(
+                "You have to specify either input_ids or inputs_embeds")
 
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
@@ -409,16 +422,17 @@ class AEDecoder(GPT2Model):
         else:
             past_length = past_key_values[0][0].size(-2)
         if position_ids is None:
-            position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
+            position_ids = torch.arange(
+                past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
             position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
 
         # GPT2Attention mask.
         if attention_mask is not None:
             if batch_size <= 0:
                 raise ValueError("batch_size has to be defined and > 0")
-            
+
             attention_mask = attention_mask.view(batch_size, -1)
-            
+
             if self._attn_implementation == "flash_attention_2":
                 attention_mask = attention_mask if 0 in attention_mask else None
             else:
@@ -434,17 +448,22 @@ class AEDecoder(GPT2Model):
                 # positions we want to attend and the dtype's smallest value for masked positions.
                 # Since we are adding it to the raw scores before the softmax, this is
                 # effectively the same as removing these entirely.
-                attention_mask = attention_mask.to(dtype=self.dtype)  # fp16 compatibility
-                attention_mask = (1.0 - attention_mask) * torch.finfo(self.dtype).min
+                attention_mask = attention_mask.to(
+                    dtype=self.dtype)  # fp16 compatibility
+                attention_mask = (1.0 - attention_mask) * \
+                    torch.finfo(self.dtype).min
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
         if self.config.add_cross_attention and encoder_hidden_states is not None:
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
-            encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
+            encoder_hidden_shape = (
+                encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)
-            encoder_attention_mask = self.invert_attention_mask(encoder_attention_mask)
+                encoder_attention_mask = torch.ones(
+                    encoder_hidden_shape, device=device)
+            encoder_attention_mask = self.invert_attention_mask(
+                encoder_attention_mask)
         else:
             encoder_attention_mask = None
 
@@ -455,10 +474,10 @@ class AEDecoder(GPT2Model):
         head_mask = self.get_head_mask(head_mask, self.config.n_layer)
 
         if inputs_embeds is None:
-            #added
+            # added
             with torch.no_grad():
                 inputs_embeds = self.wte(input_ids)
-        #added:
+        # added:
         with torch.no_grad():
             position_embeds = self.wpe(position_ids)
         hidden_states = inputs_embeds + position_embeds
@@ -488,7 +507,8 @@ class AEDecoder(GPT2Model):
                 torch.cuda.set_device(hidden_states.device)
                 # Ensure layer_past is on same device as hidden_states (might not be correct)
                 if layer_past is not None:
-                    layer_past = tuple(past_state.to(hidden_states.device) for past_state in layer_past)
+                    layer_past = tuple(past_state.to(hidden_states.device)
+                                       for past_state in layer_past)
                 # Ensure that attention_mask is always on the same device as hidden_states
                 if attention_mask is not None:
                     attention_mask = attention_mask.to(hidden_states.device)
@@ -532,9 +552,11 @@ class AEDecoder(GPT2Model):
                 presents = presents + (outputs[1],)
 
             if output_attentions:
-                all_self_attentions = all_self_attentions + (outputs[2 if use_cache else 1],)
+                all_self_attentions = all_self_attentions + \
+                    (outputs[2 if use_cache else 1],)
                 if self.config.add_cross_attention:
-                    all_cross_attentions = all_cross_attentions + (outputs[3 if use_cache else 2],)
+                    all_cross_attentions = all_cross_attentions + \
+                        (outputs[3 if use_cache else 2],)
 
             # Model Parallel: If it's the last layer for that device, put things on the next device
             if self.model_parallel:
@@ -563,33 +585,35 @@ class AEDecoder(GPT2Model):
             attentions=all_self_attentions,
             cross_attentions=all_cross_attentions,
         )
-        
-        
+
+
 class AE(GPT2LMHeadModel):
     def __init__(self, config, model_args):
         super().__init__(config)
         self.ztokens = model_args.ztokens
-        
+
         self.shallow_decoder_config = deepcopy(self.config)
         self.shallow_decoder_config.n_layer = model_args.shallow_decoder_n_layer
-        
+
         self.decoder = AEDecoder(self.shallow_decoder_config)
-        
+
         self.cross_attention = GPT2Attention(config, is_cross_attention=True)
-        self.cross_attention.c_attn.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-        self.cross_attention.q_attn.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-        
-        self.ln_1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.cross_attention.c_attn.weight.data.normal_(
+            mean=0.0, std=self.config.initializer_range)
+        self.cross_attention.q_attn.weight.data.normal_(
+            mean=0.0, std=self.config.initializer_range)
+
+        self.ln_1 = nn.LayerNorm(
+            config.hidden_size, eps=config.layer_norm_epsilon)
         # self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.ln_1.bias.data.zero_()
         self.ln_1.weight.data.fill_(1.0)
         # self.ln_2.bias.data.zero_()
         # self.ln_2.weight.data.fill_(1.0)
-        
+
         self.prefix_encoder = PrefixEncoder(config, model_args)
         self.proj = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
-        
-        
+
     def build_ed(self, model_args, main_decoder):
         self.decoder = AEDecoder.from_pretrained(
             model_args.model_name_or_path,
@@ -599,16 +623,16 @@ class AE(GPT2LMHeadModel):
         )
         print(self.shallow_decoder_config)
         print(self.decoder)
-        
+
         new_vocab_size = main_decoder.transformer.wte.weight.size(0)
-        
+
         self.decoder.resize_token_embeddings(new_vocab_size)
         # self.transformer.resize_token_embeddings(new_vocab_size)
-               
+
         self.decoder.wte = main_decoder.transformer.wte
         self.decoder.wpe = main_decoder.transformer.wpe
         self.lm_head = main_decoder.lm_head
-        
+
         self.transformer = main_decoder.transformer
         # self.transformer.wte = main_decoder.transformer.wte
         # self.transformer.wpe = main_decoder.transformer.wpe
@@ -616,76 +640,85 @@ class AE(GPT2LMHeadModel):
         # self.transformer.h = main_decoder.transformer.h
         # self.transformer.drop = main_decoder.transformer.drop
         # self.transformer.ln_f = main_decoder.transformer.ln_f
-        
-        self.zwte = nn.Embedding(self.transformer.config.vocab_size, self.transformer.embed_dim)
-        self.zwpe = nn.Embedding(self.transformer.config.max_position_embeddings, self.transformer.embed_dim)
-        self.zwte.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-        self.zwpe.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-        
+
+        self.zwte = nn.Embedding(self.ztokens, self.transformer.embed_dim)
+        self.zwpe = nn.Embedding(self.ztokens, self.transformer.embed_dim)
+
+        self.zwte.weight.data.normal_(
+            mean=0.0, std=self.config.initializer_range)
+        self.zwpe.weight.data.normal_(
+            mean=0.0, std=self.config.initializer_range)
+
     def forward(
         self,
         input_ids_enc,
         input_ids_enc_z,
-        attention_mask_enc, 
-        attention_mask_enc_z, 
+        attention_mask_enc,
+        attention_mask_enc_z,
         labels_enc,
     ):
-
+        bz = input_ids_enc.size(0)
         input_shape_z = input_ids_enc_z.size()
-        input_ids_enc_z = input_ids_enc_z.view(-1, input_shape_z[-1])
-        position_ids_z = torch.arange(0, input_shape_z[-1], dtype=torch.long, device=input_ids_enc_z.device)
-        position_ids_z = position_ids_z.unsqueeze(0).view(-1, input_shape_z[-1])
+        # input_ids_enc_z = input_ids_enc_z.view(-1, input_shape_z[-1])
+
+        z_idx = torch.arange(
+            0, input_shape_z[-1], dtype=torch.long, device=input_ids_enc_z.device)
+
+        position_ids_z = z_idx.unsqueeze(0).repeat(bz, 1)
+        input_ids_enc_z = z_idx.unsqueeze(0).repeat(bz, 1)
+
         inputs_embeds_z = self.zwte(input_ids_enc_z)
         position_embeds_z = self.zwpe(position_ids_z)
         hidden_states_z = inputs_embeds_z + position_embeds_z
-        
 
         with torch.no_grad():
             # print(input_ids_enc.shape, attention_mask_enc.shape)
             # exit()
             enc_outs = self.transformer(
-                input_ids = input_ids_enc,
-                attention_mask = attention_mask_enc
+                input_ids=input_ids_enc,
+                attention_mask=attention_mask_enc
             )
 
-        attention_mask_enc_4d = attention_mask_enc.view(input_ids_enc.size(0), -1)
+        attention_mask_enc_4d = attention_mask_enc.view(
+            input_ids_enc.size(0), -1)
         attention_mask_enc_4d = attention_mask_enc_4d[:, None, None, :]
 
-        attention_mask_enc_4d = attention_mask_enc_4d.to(dtype=self.dtype)  
-        attention_mask_enc_4d = (1.0 - attention_mask_enc_4d) * torch.finfo(self.dtype).min
-        
-        enc_lhs = enc_outs.last_hidden_state 
-        
+        attention_mask_enc_4d = attention_mask_enc_4d.to(dtype=self.dtype)
+        attention_mask_enc_4d = (
+            1.0 - attention_mask_enc_4d) * torch.finfo(self.dtype).min
+
+        enc_lhs = enc_outs.last_hidden_state
+
         hidden_states_z = self.ln_1(hidden_states_z)
-        #enc_lhs = self.ln_1(enc_lhs)
-        
+        # enc_lhs = self.ln_1(enc_lhs)
+
         residual = hidden_states_z
-        
+
         cross_outs = self.cross_attention(
-            hidden_states = hidden_states_z,
-            encoder_attention_mask = attention_mask_enc_4d,
-            encoder_hidden_states = enc_lhs
+            hidden_states=hidden_states_z,
+            encoder_attention_mask=attention_mask_enc_4d,
+            encoder_hidden_states=enc_lhs
         )
-        
+
         hidden_z = cross_outs[0] + residual
         # hidden_z = self.ln_2(hidden_z)
         hidden_z = self.proj(hidden_z)
-        
+
         past_key_values = self.prefix_encoder(hidden_z)
-        
 
         dec_outs = self.decoder(
-            input_ids = input_ids_enc,
-            past_key_values = past_key_values,
-            attention_mask = torch.cat((attention_mask_enc_z, attention_mask_enc), dim = -1),
-            output_hidden_states = True,
-            output_attentions = False
+            input_ids=input_ids_enc,
+            past_key_values=past_key_values,
+            attention_mask=torch.cat(
+                (attention_mask_enc_z, attention_mask_enc), dim=-1),
+            output_hidden_states=True,
+            output_attentions=False
         )
 
         lhs = dec_outs.last_hidden_state
-        
+
         lm_logits = self.lm_head(lhs)
-            
+
         loss = None
         if labels_enc is not None:
             # move labels to correct device to enable model parallelism
@@ -695,60 +728,59 @@ class AE(GPT2LMHeadModel):
             shift_labels = labels_enc[..., 1:].contiguous()
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+            loss = loss_fct(
+                shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
         rec_loss = loss
         return AEOutput(
-            loss = rec_loss,
-            hidden_z = hidden_z
+            loss=rec_loss,
+            hidden_z=hidden_z
         )
 
-       
-        
-    
+
 class NewTModel(GPT2PreTrainedModel):
     def __init__(self, config, model_args):
         print("*******************************")
         print(config)
         print(model_args)
-        
+
         super().__init__(config)
 
         self.ztokens = model_args.ztokens
-        
+
         self.alpha = model_args.alpha
         self.beta = model_args.beta
-        
+
         self.model_args = model_args
-        
-        #self.mseloss = F.smooth_l1_loss
+
+        # self.mseloss = F.smooth_l1_loss
         self.mseloss = nn.MSELoss()
-        
+
         self.model_parallel = False
         self.device_map = None
-        
+
         self.main_decoder = GPT2LMHeadModel(config)
-        self.aemodel = AE(deepcopy(config), model_args)
-        
+        if self.alpha > 0:
+            self.aemodel = AE(deepcopy(config), model_args)
+            self.proj = nn.Linear(config.hidden_size,
+                                  model_args.zdim, bias=False)
+
         self.softmax = nn.Softmax(dim=-1)
         self.sigmoid = nn.Sigmoid()
-        
-        self.proj  = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
-        
-        
-        self.balanceMse = 1 
+
+        self.balanceMse = 1
         self.mseclock = 0
-        
-        self.balanceRec = 1 
+
+        self.balanceRec = 1
         self.recclock = 0
         self.recthr = 2.00
-        
-        self.balanceNll = 1 
+
+        self.balanceNll = 1
         self.nllclock = 0
         self.nllthr = 2.40
-        
+
         self.trigger_time = 100
-        
+
     def build_ed(self, len_tokenizer):
         self.main_decoder = AutoModelForCausalLM.from_pretrained(
             self.model_args.model_name_or_path,
@@ -757,13 +789,16 @@ class NewTModel(GPT2PreTrainedModel):
             use_flash_attention_2=True
         )
         self.resize_token_embeddings(len_tokenizer)
-        self.aemodel.build_ed(self.model_args, self.main_decoder)
 
+        if self.alpha > 0:
+            self.aemodel.build_ed(self.model_args, self.main_decoder)
 
     # DELLA
+
     def parallelize(self, device_map=None):
         self.device_map = (
-            get_device_map(len(self.main_decoder.h), range(torch.cuda.device_count()))
+            get_device_map(len(self.main_decoder.h),
+                           range(torch.cuda.device_count()))
             if device_map is None
             else device_map
         )
@@ -773,22 +808,22 @@ class NewTModel(GPT2PreTrainedModel):
         self.aemodel.decoder.parallelize(self.device_map)
         self.first_device = self.main_decoder.first_device
         self.model_parallel = True
-        
+
     # DELLA
     def deparallelize(self):
         self.aemodel.encoder.deparallelize()
         self.aemodel.decoder.deparallelize()
         self.main_decoder.deparallelize()
         torch.cuda.empty_cache()
-        
+
     def resize_token_embeddings(self, len_t):
         self.main_decoder.resize_token_embeddings(len_t)
-        
+
     def generate(self, *args, **kwargs):
         return self.main_decoder.generate(*args, **kwargs)
-    
+
     def balance_trigger(self, mseloss, recloss, nllloss):
-        return 
+        return
         if recloss <= self.recthr:
             self.recclock += 1
         else:
@@ -797,7 +832,7 @@ class NewTModel(GPT2PreTrainedModel):
             self.balanceRec = 1
         elif self.recclock >= self.trigger_time:
             self.balanceRec = 0
-        
+
         if nllloss <= self.nllthr:
             self.nllclock += 1
         else:
@@ -806,61 +841,62 @@ class NewTModel(GPT2PreTrainedModel):
             self.balanceNll = 1
         elif self.nllclock >= self.trigger_time:
             self.balanceNll = 0
-            
+
     def forward(
         self,
-        input_ids, 
+        input_ids,
         input_ids_enc,
         input_ids_enc_z,
-        attention_mask, 
-        attention_mask_enc, 
-        attention_mask_enc_z, 
-        labels, 
+        attention_mask,
+        attention_mask_enc,
+        attention_mask_enc_z,
+        labels,
         labels_enc,
-        pos_mask, 
+        pos_mask,
         **kwargs
     ):
 
         bs = input_ids.size(0)
 
         main_dec_outs = self.main_decoder(
-            input_ids = input_ids, 
-            labels = labels,
-            attention_mask = attention_mask, 
-            output_hidden_states = True,
-            output_attentions = True
+            input_ids=input_ids,
+            labels=labels,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            output_attentions=True
         )
-
-
-        main_dec_lhs = main_dec_outs.hidden_states[-1] # bs seqlen h
-        #'CausalLMOutputWithCrossAttentions' object has no attribute 'last_hidden_state' 
-
-        main_hidden_z = main_dec_lhs[pos_mask]
-        main_hidden_z = self.proj(main_hidden_z)
-        
-        ae_outs = self.aemodel(
-            input_ids_enc = input_ids_enc,
-            input_ids_enc_z = input_ids_enc_z,
-            attention_mask_enc = attention_mask_enc, 
-            attention_mask_enc_z = attention_mask_enc_z, 
-            labels_enc = labels_enc
-        )
-
-        #print(main_hidden_z.shape, ae_outs.hidden_z.shape)
-        mseloss = self.mseloss(main_hidden_z.float(), ae_outs.hidden_z.reshape(-1, ae_outs.hidden_z.size(-1)).detach().float())
-
-        recloss = ae_outs.loss
         nllloss = main_dec_outs.loss
-        
-        self.balance_trigger(mseloss, recloss, nllloss)
 
-        tloss = self.alpha * mseloss * self.balanceMse \
-            + self.beta * recloss * self.balanceRec \
-            + nllloss * self.balanceNll
-        print('\n')
-        print(f"{self.training}; mseloss = {self.alpha} * {mseloss:.6f} * {self.balanceMse:.6f}, recloss = {self.beta} * {recloss:.6f} * {self.balanceRec:.6f}, nllloss = {nllloss:.6f} * {self.balanceNll:.6f}")
+        if self.alpha > 0:
+            main_dec_lhs = main_dec_outs.hidden_states[-1]  # bs seqlen h
+            # 'CausalLMOutputWithCrossAttentions' object has no attribute 'last_hidden_state'
+
+            main_hidden_z = main_dec_lhs[pos_mask]
+            main_hidden_z = self.proj(main_hidden_z)
+
+            ae_outs = self.aemodel(
+                input_ids_enc=input_ids_enc,
+                input_ids_enc_z=input_ids_enc_z,
+                attention_mask_enc=attention_mask_enc,
+                attention_mask_enc_z=attention_mask_enc_z,
+                labels_enc=labels_enc
+            )
+
+            # print(main_hidden_z.shape, ae_outs.hidden_z.shape)
+            mseloss = self.mseloss(main_hidden_z.float(
+            ), ae_outs.hidden_z.reshape(-1, ae_outs.hidden_z.size(-1)).detach().float())
+
+            recloss = ae_outs.loss
+
+            tloss = self.alpha * mseloss * self.balanceMse \
+                + self.beta * recloss * self.balanceRec \
+                + nllloss * self.balanceNll
+
+            print(f"{self.training}; mseloss = {self.alpha} * {mseloss:.6f} * {self.balanceMse:.6f}, recloss = {self.beta} * {recloss:.6f} * {self.balanceRec:.6f}, nllloss = {nllloss:.6f} * {self.balanceNll:.6f}")
+        else:
+            tloss = nllloss
+
         return CausalLMOutput(
-            loss = tloss if self.training else nllloss,
-            logits = main_dec_outs.logits,
+            loss=tloss if self.training else nllloss,
+            logits=main_dec_outs.logits,
         )
-        
