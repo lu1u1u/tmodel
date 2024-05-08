@@ -563,8 +563,13 @@ class AE(GPT2LMHeadModel):
         self.decoder = AEDecoder(self.shallow_decoder_config)
         
         self.cross_attention = GPT2Attention(config, is_cross_attention=True)
+        self.cross_attention.c_attn.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        self.cross_attention.q_attn.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        
         self.ln_1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
-        self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_1.bias.data.zero_()
+        self.ln_1.weight.data.fill_(1.0)
+        #self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         
         self.prefix_encoder = PrefixEncoder(config, model_args)
         self.proj = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
@@ -588,7 +593,8 @@ class AE(GPT2LMHeadModel):
         self.transformer = main_decoder.transformer
         self.zwte = nn.Embedding(self.transformer.config.vocab_size, self.transformer.embed_dim)
         self.zwpe = nn.Embedding(self.transformer.config.max_position_embeddings, self.transformer.embed_dim)
-    
+        self.zwte.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        self.zwpe.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
     def forward(
         self,
         input_ids_enc,
@@ -632,7 +638,7 @@ class AE(GPT2LMHeadModel):
         )
         
         hidden_z = cross_outs[0] + residual
-        hidden_z = self.ln_2(hidden_z)
+        #hidden_z = self.ln_2(hidden_z)
         hidden_z = self.proj(hidden_z)
         
         past_key_values = self.prefix_encoder(hidden_z)
