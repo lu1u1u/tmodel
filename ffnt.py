@@ -602,6 +602,7 @@ class AE(GPT2LMHeadModel):
         block_config.add_cross_attention = True
         self.cross_block = GPT2Block(block_config)
         self.r_init_weights(self.cross_block)
+        self.lnz = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
 
         self.prefix_encoder = PrefixEncoder(config, model_args)
         self.proj = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
@@ -716,7 +717,8 @@ class AE(GPT2LMHeadModel):
             encoder_attention_mask = attention_mask_enc_4d,
             encoder_hidden_states = enc_lhs
         )[0]
-        
+
+        hidden_z = self.lnz(hidden_z)
         hidden_z = self.proj(hidden_z)
 
         past_key_values = self.prefix_encoder(hidden_z)
