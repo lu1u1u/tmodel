@@ -37,7 +37,10 @@ def evaluate(model, loader, ctx, temperature, top_k, results=None, mode='test'):
                 top_k = top_k
             )
         #model.reset_cache()
-
+        print("Num_tar_tokens = ",num_target_tokens )
+        print("Question = ", loader.dataset.tokenizer.decode(x[0]))
+        print("Pred = ",loader.dataset.tokenizer.decode(y_pred[0]))
+        print("Gold = ",loader.dataset.tokenizer.decode(y[0]))
         # Check how many tokens we get right and how many predictions are completely correct
         correct = y.eq(y_pred[:, -num_target_tokens:]).float()
 
@@ -81,14 +84,13 @@ def evaluate_forced(model, loader, ctx, results=None, mode='test'):
         with ctx:
             logits, loss, accs = model(*tp)
 
-        total_acc.update(val=accs['acc'], num=tp[0].shape[0])
+        total_acc.update(val=accs['token_acc'], num=tp[0].shape[0])
         total_loss.update(val=loss, num=tp[0].shape[0])
         for i in range(num_target_tokens):
-            #tokens_corr[i].update(accs['token_acc'], tp[0].shape[0])
-            tokens_corr[i].update(0, tp[0].shape[0])
+            tokens_corr[i].update(accs['token_acc'], tp[0].shape[0])
 
-        bar.set_description('Forced Loss: {:.4f} Forced Acc: {:.2f}'.format(total_loss.get(),
-                                                              total_acc.get(percentage=True)))
+        bar.set_description('Forced Loss: {:.4f} Forced Acc: {}'.format(total_loss.get(),
+                                                              total_acc.get_tensor_for_display()))
 
     if results is not None:
         results[mode + '/forced loss'] = total_loss.get()
