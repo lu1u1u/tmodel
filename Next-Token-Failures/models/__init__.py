@@ -2,7 +2,7 @@ from models.gpt import GPT
 from models.pythia import Pythia
 from models.config import GPTConfig
 
-from models.newt import NewTModel
+from models.newnew import NewTModel
 from transformers import (
     AutoConfig,
 
@@ -24,11 +24,33 @@ def get_model(args, **kwargs):
 
     elif args.model.startswith('pythia'):
         model = Pythia.from_pretrained(args.model, teacherless_token=args.teacherless_token)
-    elif args.model.startswith('/yinyongjing/hfmodels/gpt2'):
+    elif args.model.startswith('/data3/home'):
         
         model_args = kwargs.get("model_args")
         config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-        tmodel = NewTModel(config = config, model_args = model_args )
+        # added
         tokenizer = kwargs.get("tokenizer")
-        tmodel.build_ed(tokenizer.vocab_size)
+        if args.use_minigpt:
+            assert 'small' in args.model
+            config.update(
+                {
+                    "n_layer" : 12,
+                    "n_embd" : 384,
+                    "n_head" : 6,
+                }
+            )
+        config.update(
+            {
+                "ztokens" : model_args.ztokens,
+                "zdim" : model_args.zdim,
+                "z_start_id" : tokenizer.z_start_id,
+                "len_tokenizer": tokenizer.vocab_size
+            }
+        )
+
+        if model_args.use_flash_attention:
+            config._attn_implementation = "flash_attention_2"
+            
+        tmodel = NewTModel(config = config, model_args = model_args)
+        
     return tmodel
