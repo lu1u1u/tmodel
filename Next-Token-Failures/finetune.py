@@ -100,10 +100,32 @@ parser.add_argument(
 parser.add_argument(
         "--fullenc",  action = 'store_true', default = False, help = 'choose to use full encstr',
     )
+
+parser.add_argument(
+        "--znorm",  action = 'store_true', default = False, help = 'znorm',
+    )
+
+parser.add_argument(
+        "--use_flash_attention",  action = 'store_true', default = False, help = 'fls',
+    )
+
+parser.add_argument(
+        "--from_scratch",  action = 'store_true', default = False, help = 'scratch',
+    )
+
+parser.add_argument(
+        "--use_minigpt",  action = 'store_true', default = False, help = 'use_minigpt',
+    )
+
+parser.add_argument(
+        "--ae_model_name_or_path",  type=str, help = 'ae_path',
+    )
+
 args = parser.parse_args()
 
 class ModelArguments:
     model_name_or_path = args.model
+    ae_model_name_or_path = args.ae_model_name_or_path
     ztokens = args.ztokens
     zdim = args.zdim
     shallow_decoder_n_layer = args.snl
@@ -111,10 +133,14 @@ class ModelArguments:
     beta = args.b
     spname = f"{args.desc}".replace('-','_')
     fullenc = args.fullenc
+    znorm = args.znorm
+    use_flash_attention = args.use_flash_attention 
+    from_scratch = args.from_scratch
     
 model_args = ModelArguments()   
 print("=================================================")
 print("model_name_or_path = ",model_args.model_name_or_path)
+print("ae_model_name_or_path = ", model_args.ae_model_name_or_path)
 print("ztokens = ",model_args.ztokens)
 print("zdim = ", model_args.zdim)
 print("shallow_decoder_n_layer = ", model_args.shallow_decoder_n_layer)
@@ -122,6 +148,9 @@ print("alpha = ", model_args.alpha)
 print("beta = ", model_args.beta)
 print("spname = ", model_args.spname)
 print("use full encstr = ", model_args.fullenc)
+print("znorm = ", model_args.znorm)
+print("use_flash_attention = ", model_args.use_flash_attention)
+print("from_scratch = ", model_args.from_scratch)
 print("=================================================")
 
 
@@ -196,14 +225,10 @@ num_iters = 0
 
 for ep in range(args.epochs):
     train_bar = tqdm(train_loader)
-    total_loss, total_acc = AverageMeter(), AverageMeter()
+    total_loss, total_acc, total_ptk_acc = AverageMeter(), AverageMeter(), AverageMeter()
 
     for tp in train_bar:
-        if num_iters % args.save_every == 0 and num_iters > 0:
-            torch.save(
-                model.state_dict(),
-                path + "_epoch_" + str(ep)
-            )
+
         # determine and set the learning rate for this iteration
         lr = get_lr(num_iters, args.lr, warmup_iters, lr_decay_iters, min_lr) if decay_lr else args.lr
         for param_group in optimizer.param_groups:
@@ -212,6 +237,7 @@ for ep in range(args.epochs):
         with ctx:
             logits, loss, accs = model(*tp)
 
+        total_ptk_acc.update(accs['token_acc'], tp[0].shape[0])
         total_loss.update(loss.item(), tp[0].shape[0] * train_data.num_target_tokens)
         total_acc.update(accs['acc'], tp[0].shape[0] * train_data.num_target_tokens)
         scaler.scale(loss).backward()
@@ -220,8 +246,9 @@ for ep in range(args.epochs):
         optimizer.zero_grad(set_to_none=True)
         num_iters += 1
         train_bar.set_description(
-            'Epoch: [{}/{}] Loss: {:.4f} Acc: {:.2f}'.format(ep, args.epochs, total_loss.get(),
-             total_acc.get(percentage=True))
+            'Epoch: [{}/{}] Loss: {:.4f} Acc: {:.2f} Ptk: {}'.format(ep, args.epochs, total_loss.get(),
+             total_acc.get(percentage=True),
+             total_ptk_acc.get_tensor_for_display())
         )
 
         # evaluate the loss on train/val sets and write checkpoints
@@ -234,5 +261,6 @@ for ep in range(args.epochs):
             results = evaluate(model, test_loader, temperature=0.8, ctx=ctx, top_k=top_k, results=results, mode='Test')
             results = evaluate_forced(model, test_loader, ctx=ctx, results=results, mode='Test')
 
+            print(results)
             if wandb_log:
                 wandb.log(results)
