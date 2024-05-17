@@ -83,7 +83,7 @@ def get_tokenizer(args, **kwargs):
     elif args.model.startswith('phi'):
         t = AutoTokenizer.from_pretrained("microsoft/phi-2", trust_remote_code=True)
         tokenizer = Tokenizer(encoder=t.encode, decoder=t.decode, vocab_size=51200, name='phi')
-    elif args.model.startswith('/yinyongjing/hfmodels/gpt2'):
+    elif args.model.startswith('/data3/home'):
         t = AutoTokenizer.from_pretrained(args.model)
         model_args = kwargs.get("model_args")
         special_list = [f'<THO{idx}>' for idx in range(model_args.ztokens)]
@@ -92,7 +92,16 @@ def get_tokenizer(args, **kwargs):
         print(special_seq)
         t.add_special_tokens({'additional_special_tokens':special_list})
         print(t)
-        tokenizer = ZTokenizer(encoder=t.encode, decoder=t.decode, vocab_size=len(t) , name='gpt2', model_args=model_args, tokenizer = t)
+        tokenizer = ZTokenizer(
+            encoder=t.encode, 
+            decoder=t.decode, 
+            vocab_size=len(t), 
+            name='gpt2', 
+            model_args=model_args, 
+            tokenizer = t
+        )
         tokenizer.zseq = tokenizer.encode(special_seq)
+        tokenizer.z_start_id = tokenizer.encode('<THO0>')[0]
         print("zseq:",tokenizer.zseq)
+        print("z_start_id:",tokenizer.z_start_id)
     return tokenizer
