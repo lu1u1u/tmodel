@@ -244,6 +244,90 @@ class ZGraphs(Dataset):
         # Switch back to "train" mode for teacher-forcing
         self.eval_mode = False
         
+class NZGraphs(Dataset):
+    def __init__(self, tokenizer, n_samples, data_path, device, eval=False, teacherless_token=None, reverse=False):
+        self.tokenizer = tokenizer
+        self.n_samples = n_samples
+        self.device = device
+        self.eval_mode = eval
+        self.data_path = data_path
+        self.teacherless_token = teacherless_token
+        self.reverse = reverse
+
+        self.data_file = prefix_target_list(self.data_path, reverse=reverse)[:n_samples]
+        self.tokenized, self.num_prefix_tokens, self.num_target_tokens = tokenizer.tokenize(self.data_file)
+
+        self.num_tokens = self.num_prefix_tokens + self.num_target_tokens
+
+    def __len__(self):
+        return len(self.data_file)
+
+    def __getitem__(self, idx):
+        if self.eval_mode:
+            # In eval mode return the entire sequence
+            return torch.cat(
+                (
+                    self.tokenized[idx][:self.num_prefix_tokens].clone(),
+                    torch.tensor(self.tokenizer.zseq),
+                    self.tokenized[idx][self.num_prefix_tokens:].clone()
+                )
+            ).to(self.device)
+        
+        #print(self.num_tokens)
+        # Create inputs
+        model_args = self.tokenizer.model_args
+        if model_args.fullenc:
+            input_ids_enc_pre = self.tokenized[idx].clone()
+        else:
+            input_ids_enc_pre = self.tokenized[idx][self.num_prefix_tokens:].clone()
+        
+        # ae enc input
+        input_ids_enc = torch.cat(
+            (input_ids_enc_pre,torch.tensor(self.tokenizer.zseq)),
+            dim = -1
+        ).clone()
+        
+        # ae dec input
+        input_ids_dec = input_ids_enc_pre.clone()
+        
+        # ae labels
+        labels_enc = input_ids_enc_pre.clone()
+
+        
+        input_ids = torch.cat(
+            (
+                self.tokenized[idx][:self.num_prefix_tokens].clone(),
+                torch.tensor(self.tokenizer.zseq),
+                self.tokenized[idx][self.num_prefix_tokens:].clone()
+            )
+        )
+        #print(input_ids)
+        if self.teacherless_token is not None:
+            assert 0, "not implemented"
+            x[self.num_prefix_tokens:] = self.teacherless_token
+            x = x.to(self.device)
+        # Create targets in the form [-1, ..., -1, 4, 7, 9, 2, ...] where we replace the prefix tokens by -1 so that
+        # we can skip their gradient calculation in the loss (double-check if that's correct)
+        y = torch.cat([-100 * torch.ones((self.num_prefix_tokens  + model_args.ztokens, )),
+                       self.tokenized[idx][self.num_prefix_tokens:].clone()])
+
+            
+        return (
+            input_ids.to(self.device),  # input_ids for main_dec
+            input_ids_enc.to(self.device),  # input_ids for ae enc
+            input_ids_dec.to(self.device), # input_ids for ae dec
+            y.long().to(self.device), # labels for ae enc
+            labels_enc.long().to(self.device), # labels for ae
+        )
+
+    def eval(self):
+        # Switch to "eval" mode when generating sequences without teacher-forcing
+        self.eval_mode = True
+
+    def train(self):
+        # Switch back to "train" mode for teacher-forcing
+        self.eval_mode = False
+        
 def get_edge_list(x, num_nodes, path_len):
     """
     Given the tokenised input for the Transformer, map back to the edge_list
