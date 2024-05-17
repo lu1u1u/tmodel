@@ -28,7 +28,11 @@ class AverageMeter:
     def get(self, percentage=False):
         val = self.val / self.num * 100 if percentage else self.val / self.num
         return val
-
+    
+    def get_tensor_for_display(self):
+        val = self.val / self.num 
+        newlist = [round(i.item()* 100,1)  for i in val]
+        return newlist
 
 def accuracy(logits, targets):
     num_prefix_tokens = targets[0].eq(-1).sum().item()
