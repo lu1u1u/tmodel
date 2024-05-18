@@ -145,11 +145,7 @@ class AE(PreTrainedModel):
             # exit()
             input_ids_embeds_with_z = torch.cat((hidden_up, input_ids_embeds), dim=1)
             # B Z
-            
-           
 
-
-            self.decoder.eval()
             dec_outs = self.decoder.transformer(
                 inputs_embeds=input_ids_embeds_with_z,
                 # input_ids=input_ids_enc,
