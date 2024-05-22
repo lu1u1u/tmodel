@@ -56,7 +56,7 @@ echo $lr
 
 logname=newt-suffix-$modelname-d$deg-p$path-ztokens$ztokens-a$a-b$b-zdim-$zdim-lr$lr
 python ./finetune.py \
-    --model $modelpath \ #--from_scratch --use_minigpt \
+    --model $modelpath \ 
     --desc $logname \
     --n_train 200000 \
     --n_test 20000 \
@@ -74,3 +74,5 @@ python ./finetune.py \
     --num_nodes $nn \
     --save_every 500000 \
     --lr $lr > ./newtlogs/log.$logname 2>&1
+
+    #--from_scratch --use_minigpt \
