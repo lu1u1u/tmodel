@@ -87,7 +87,7 @@ def evaluate_forced(model, loader, ctx, results=None, mode='test'):
         total_acc.update(val=accs['token_acc'], num=tp[0].shape[0])
         total_loss.update(val=loss, num=tp[0].shape[0])
         for i in range(num_target_tokens):
-            tokens_corr[i].update(accs['token_acc'], tp[0].shape[0])
+            tokens_corr[i].update(accs['token_acc'][i], tp[0].shape[0])
 
         bar.set_description('Forced Loss: {:.4f} Forced Acc: {}'.format(total_loss.get(),
                                                               total_acc.get_tensor_for_display()))
