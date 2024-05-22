@@ -2,7 +2,7 @@ from models.gpt import GPT
 from models.pythia import Pythia
 from models.config import GPTConfig
 
-from models.newnew import NewTModel
+
 from transformers import (
     AutoConfig,
 
@@ -51,6 +51,12 @@ def get_model(args, **kwargs):
         if model_args.use_flash_attention:
             config._attn_implementation = "flash_attention_2"
             
-        tmodel = NewTModel(config = config, model_args = model_args)
-        
+        if args.use_new:
+            from models.newnew import NewTModel
+            tmodel = NewTModel(config = config, model_args = model_args)
+        else:
+            from models.newt import NewTModel
+            tmodel = NewTModel(config = config, model_args = model_args)
+            tmodel.build_ed(tokenizer.vocab_size)
+        print(tmodel)
     return tmodel
