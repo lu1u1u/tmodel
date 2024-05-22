@@ -378,16 +378,19 @@ def get_edge_list_byte(x, num_nodes, path_len, decode):
 
 
 if __name__ == '__main__':
-    import types
+    #import types
     #from data import get_dataset
     #from tokenizing import get_tokenizer
 
     # Create graphs and save
     n_train = 200000
     n_test = 20000
-    deg = 20
-    path_len = 5
-    num_nodes = 100
+    # TODO : genrate more datasets
+    # eg. (20,10), (10,20), (2,30), (2,40), (5,20) ...
+    deg = 20 # TODO : change deg
+    path_len = 10 # TODO : change pathlen
+    
+    num_nodes = deg * path_len
     reverse = False
     generate_and_save(n_train=n_train, n_test=n_test, degSource=deg, pathLen=path_len, numNodes=num_nodes,
                       reverse=reverse)
