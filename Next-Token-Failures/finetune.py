@@ -118,11 +118,16 @@ parser.add_argument(
     )
 
 parser.add_argument(
-        "--ae_model_name_or_path",  type=str, help = 'ae_path',
+        "--use_new",  action = 'store_true', default = False, help = 'use_newnew',
+    )
+
+parser.add_argument(
+        "--ae_model_name_or_path",  type=str, default = 'gpt2', help = 'ae_path',
     )
 
 args = parser.parse_args()
-
+if args.use_new:
+    print('Using newnew model instead of newt...')
 class ModelArguments:
     model_name_or_path = args.model
     ae_model_name_or_path = args.ae_model_name_or_path
