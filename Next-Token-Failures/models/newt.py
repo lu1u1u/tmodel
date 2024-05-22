@@ -1,12 +1,12 @@
 import math
 import os
 import warnings
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 import random
 
-from scipy.optimize import linear_sum_assignment
 
 import torch
 import torch.utils.checkpoint
@@ -79,7 +79,7 @@ class PrefixEncoder(nn.Module):
         self,
         input_embd
     ):
-
+        
         batch_size = input_embd.size(0)
 
         past_key_values = self.prefix_mlp(input_embd)
@@ -112,6 +112,7 @@ class PrefixEncoder(nn.Module):
         #print(f"len all_kvs[0]: {type(all_kvs[0]),len(all_kvs[0])}")
         #print(f"shape of k/v : {type(all_kvs[0][0]), all_kvs[0][0].shape, all_kvs[0][1].shape}")
         #assert 0
+
         return all_kvs
 
 
@@ -415,21 +416,26 @@ class AEDecoder(GPT2Model):
         if attention_mask is not None:
             if batch_size <= 0:
                 raise ValueError("batch_size has to be defined and > 0")
+            
             attention_mask = attention_mask.view(batch_size, -1)
-            # We create a 3D attention mask from a 2D tensor mask.
-            # Sizes are [batch_size, 1, 1, to_seq_length]
-            # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
-            # this attention mask is more simple than the triangular masking of causal attention
-            # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
-            attention_mask = attention_mask[:, None, None, :]
+            
+            if self._attn_implementation == "flash_attention_2":
+                attention_mask = attention_mask if 0 in attention_mask else None
+            else:
+                # We create a 3D attention mask from a 2D tensor mask.
+                # Sizes are [batch_size, 1, 1, to_seq_length]
+                # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
+                # this attention mask is more simple than the triangular masking of causal attention
+                # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
+                attention_mask = attention_mask[:, None, None, :]
 
-            # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
-            # masked positions, this operation will create a tensor which is 0.0 for
-            # positions we want to attend and the dtype's smallest value for masked positions.
-            # Since we are adding it to the raw scores before the softmax, this is
-            # effectively the same as removing these entirely.
-            attention_mask = attention_mask.to(dtype=self.dtype)  # fp16 compatibility
-            attention_mask = (1.0 - attention_mask) * torch.finfo(self.dtype).min
+                # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
+                # masked positions, this operation will create a tensor which is 0.0 for
+                # positions we want to attend and the dtype's smallest value for masked positions.
+                # Since we are adding it to the raw scores before the softmax, this is
+                # effectively the same as removing these entirely.
+                attention_mask = attention_mask.to(dtype=self.dtype)  # fp16 compatibility
+                attention_mask = (1.0 - attention_mask) * torch.finfo(self.dtype).min
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
@@ -568,53 +574,56 @@ class AE(GPT2LMHeadModel):
         self.shallow_decoder_config.n_layer = model_args.shallow_decoder_n_layer
         
         self.decoder = AEDecoder(self.shallow_decoder_config)
-        self.encoder = GPT2Model(config)
         
         self.cross_attention = GPT2Attention(config, is_cross_attention=True)
+        self.cross_attention.c_attn.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        self.cross_attention.q_attn.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        
         self.ln_1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
-        self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        # self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_1.bias.data.zero_()
+        self.ln_1.weight.data.fill_(1.0)
+        # self.ln_2.bias.data.zero_()
+        # self.ln_2.weight.data.fill_(1.0)
         
         self.prefix_encoder = PrefixEncoder(config, model_args)
         self.proj = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
         
-    #def disable_decoder_grad_except_layers(self):
-    #    self.decoder.transformer.wte.requires_grad_(False)
-    #    self.decoder.transformer.wpe.requires_grad_(False)
-    #    self.decoder.lm_head.requires_grad_(False)
-        
-    #def resume_main_decoder_grad(self):
-    #    self.decoder.transformer.wte.requires_grad_(True)
-    #    self.decoder.transformer.wpe.requires_grad_(True)
-    #    self.decoder.lm_head.requires_grad_(True)
         
     def build_ed(self, model_args, main_decoder):
-        self.decoder = AEDecoder.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=self.shallow_decoder_config
-        )
+        if model_args.from_scratch:
+            self.decoder = AEDecoder(self.shallow_decoder_config)
+        else:
+            self.decoder = AEDecoder.from_pretrained(
+                model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                config=self.shallow_decoder_config
+            )
         print(self.shallow_decoder_config)
-        print(self.decoder)
+
         
         new_vocab_size = main_decoder.transformer.wte.weight.size(0)
         
         self.decoder.resize_token_embeddings(new_vocab_size)
-        self.encoder.resize_token_embeddings(new_vocab_size)
+        # self.transformer.resize_token_embeddings(new_vocab_size)
                
         self.decoder.wte = main_decoder.transformer.wte
         self.decoder.wpe = main_decoder.transformer.wpe
         self.lm_head = main_decoder.lm_head
         
-        self.encoder.wte = main_decoder.transformer.wte
-        self.encoder.wpe = main_decoder.transformer.wpe
-        assert len(self.encoder.h) == len(main_decoder.transformer.h)
-        self.encoder.h = main_decoder.transformer.h
-        self.encoder.drop = main_decoder.transformer.drop
-        self.encoder.ln_f = main_decoder.transformer.ln_f
+        self.transformer = main_decoder.transformer
+        # self.transformer.wte = main_decoder.transformer.wte
+        # self.transformer.wpe = main_decoder.transformer.wpe
+        # assert len(self.transformer.h) == len(main_decoder.transformer.h)
+        # self.transformer.h = main_decoder.transformer.h
+        # self.transformer.drop = main_decoder.transformer.drop
+        # self.transformer.ln_f = main_decoder.transformer.ln_f
         
-        self.zwte = nn.Embedding(self.encoder.config.vocab_size, self.encoder.embed_dim)
-        self.zwpe = nn.Embedding(self.encoder.config.max_position_embeddings, self.encoder.embed_dim)
-    
+        self.zwte = nn.Embedding(self.transformer.config.vocab_size, self.transformer.embed_dim)
+        self.zwpe = nn.Embedding(self.transformer.config.max_position_embeddings, self.transformer.embed_dim)
+        self.zwte.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        self.zwpe.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        
     def forward(
         self,
         input_ids_enc,
@@ -630,11 +639,14 @@ class AE(GPT2LMHeadModel):
         position_embeds_z = self.zwpe(position_ids_z)
         hidden_states_z = inputs_embeds_z + position_embeds_z
         
+
         with torch.no_grad():
-            enc_outs = self.encoder(
+
+            enc_outs = self.transformer(
                 input_ids = input_ids_enc
             )
 
+    
         
         enc_lhs = enc_outs.last_hidden_state 
         
@@ -649,19 +661,20 @@ class AE(GPT2LMHeadModel):
         )
         
         hidden_z = cross_outs[0] + residual
-        hidden_z = self.ln_2(hidden_z)
+        # hidden_z = self.ln_2(hidden_z)
         hidden_z = self.proj(hidden_z)
         
         past_key_values = self.prefix_encoder(hidden_z)
         
+
         dec_outs = self.decoder(
             input_ids = input_ids_enc,
             past_key_values = past_key_values,
             output_hidden_states = True,
             output_attentions = False
         )
-        lhs = dec_outs.last_hidden_state 
-            
+
+        lhs = dec_outs.last_hidden_state
         
         lm_logits = self.lm_head(lhs)
             
@@ -689,6 +702,8 @@ class NewTModel(GPT2PreTrainedModel):
     def __init__(self, config, model_args):
         print("*******************************")
         print(config)
+        if model_args.zdim == -1:
+            model_args.zdim = config.hidden_size
         print(model_args)
         
         super().__init__(config)
@@ -702,43 +717,27 @@ class NewTModel(GPT2PreTrainedModel):
         
         self.mseloss = F.smooth_l1_loss
         #self.mseloss = nn.MSELoss()
-        
-        self.model_parallel = False
-        self.device_map = None
-        
-        self.main_decoder = GPT2LMHeadModel(config)
+            
+        self.main_decoder = GPT2LMHeadModel(self.config)
         self.aemodel = AE(deepcopy(config), model_args)
         
         self.softmax = nn.Softmax(dim=-1)
-        self.sigmoid = nn.Sigmoid()
         
         self.proj  = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
         
         
-        self.balanceMse = 1 
-        self.mseclock = 0
-        
-        self.balanceRec = 1 
-        self.recclock = 0
-        self.recthr = 2.00
-        
-        self.balanceNll = 1 
-        self.nllclock = 0
-        self.nllthr = 2.40
-        
-        self.trigger_time = 100
-        
     def build_ed(self, len_tokenizer):
-        self.main_decoder = AutoModelForCausalLM.from_pretrained(
-            self.model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
-            config=self.config
-        )
+
+        if not self.model_args.from_scratch:
+            self.main_decoder = AutoModelForCausalLM.from_pretrained(
+                self.model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
+                config=self.config
+            )
         self.resize_token_embeddings(len_tokenizer)
         self.aemodel.build_ed(self.model_args, self.main_decoder)
-        
-        
-        
+
+
     # DELLA
     def parallelize(self, device_map=None):
         self.device_map = (
@@ -746,9 +745,9 @@ class NewTModel(GPT2PreTrainedModel):
             if device_map is None
             else device_map
         )
-        assert_device_map(self.device_map, len(self.encoder.h))
+        assert_device_map(self.device_map, len(self.aemodel.transformer.h))
         self.main_decoder.parallelize(self.device_map)
-        self.aemodel.encoder.parallelize(self.device_map)
+        self.aemodel.transformer.parallelize(self.device_map)
         self.aemodel.decoder.parallelize(self.device_map)
         self.first_device = self.main_decoder.first_device
         self.model_parallel = True
@@ -765,9 +764,7 @@ class NewTModel(GPT2PreTrainedModel):
         
     def generate(self, *args, **kwargs):
         return self.main_decoder.generate(*args, **kwargs)
-
-    def balance_trigger(self, mseloss, recloss, nllloss):
-        return 
+    
             
     def forward(
         self,
@@ -779,19 +776,19 @@ class NewTModel(GPT2PreTrainedModel):
         pos_mask, 
         **kwargs
     ):
-        
-        #print(input_ids, input_ids.shape)
-        #print(labels, labels.shape)
+
+        bs = input_ids.size(0)
+
         main_dec_outs = self.main_decoder(
             input_ids = input_ids, 
             labels = labels,
             output_hidden_states = True,
             output_attentions = True
         )
-        
 
-        main_dec_lhs = main_dec_outs.hidden_states[-1] 
 
+        main_dec_lhs = main_dec_outs.hidden_states[-1] # bs seqlen h
+        #'CausalLMOutputWithCrossAttentions' object has no attribute 'last_hidden_state' 
 
         main_hidden_z = main_dec_lhs[pos_mask]
         main_hidden_z = self.proj(main_hidden_z)
@@ -801,36 +798,45 @@ class NewTModel(GPT2PreTrainedModel):
             input_ids_enc_z = input_ids_enc_z,
             labels_enc = labels_enc
         )
+
         #print(main_hidden_z.shape, ae_outs.hidden_z.shape)
-        mseloss = self.mseloss(main_hidden_z, ae_outs.hidden_z.reshape(-1, ae_outs.hidden_z.size(-1)).detach())
+        mseloss = self.mseloss(main_hidden_z.float(), ae_outs.hidden_z.reshape(-1, ae_outs.hidden_z.size(-1)).detach().float())
+
         recloss = ae_outs.loss
         nllloss = main_dec_outs.loss
         
-        self.balance_trigger(mseloss, recloss, nllloss)
 
-        tloss = self.alpha * mseloss * self.balanceMse \
-            + self.beta * recloss * self.balanceRec \
-            + nllloss * self.balanceNll
-        
+        tloss = self.alpha * mseloss  \
+            + self.beta * recloss  \
+            + nllloss 
+            
         with open(f'./balance_logs/{self.model_args.spname}.txt', 'a') as f:
-           f.write(f"{self.training}; mseloss = {self.alpha} * {mseloss:.6f} * {self.balanceMse:.6f}, recloss = {self.beta} * {recloss:.6f} * {self.balanceRec:.6f}, nllloss = {nllloss:.6f} * {self.balanceNll:.6f}\n")
+           f.write(f"{self.training}; mseloss = {self.alpha} * {mseloss:.6f}, recloss = {self.beta} * {recloss:.6f}, nllloss = {nllloss:.6f}\n")
 
-        def calc_acc(preds, labels):
-            totals = 0
-            exm = 0
-            for idx, i in enumerate(labels):
-                if i.item() != -100:
-                    totals += 1
-                    if i.item() == preds[idx].item():
-                        exm += 1
-            res =  exm / totals if totals else 0      
-            return {'acc': res} 
         preds = main_dec_outs.logits.argmax(dim=-1)
         
         preds = preds[:, :-1]
         labels = labels[:,1:]
         #print(f"preds: {preds[labels != -100]}")
         #print(f"golds: {labels[labels != -100]}")
-        acc = calc_acc(preds.reshape(-1), labels.reshape(-1))
+        acc = self.accuracy(preds, labels)
         return main_dec_outs.logits, tloss if self.training else nllloss, acc
+
+    def accuracy(self, preds, labels):
+        bz = labels.size(0)
+        #print(labels)
+        labels = labels[labels!=-100].reshape(bz, -1)
+        #print(labels)
+        preds = preds[:, -labels.size(1):]
+        #print(preds)
+        #print(preds.shape, labels.shape)
+
+        correct = preds.eq(labels).to(torch.float)
+        seq_correct = torch.sum(correct, dim=1).eq(labels.size(1)).float()
+        acc = torch.mean(seq_correct)
+        per_token_acc = correct.mean(dim=0)
+        return {
+            'acc' : acc,
+            'token_acc' : per_token_acc
+        }
         
