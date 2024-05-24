@@ -59,6 +59,95 @@ from transformers.modeling_outputs import (
 
 logger = logging.get_logger(__name__)
 
+
+class LnPrefixEncoder(nn.Module):
+    def __init__(self, config, model_args):
+        super().__init__()
+        # Config
+        # self.prefix_seq_len = config.prefix_seq_len
+        self.input_dim = model_args.zdim
+        self.hidden_dim = config.n_embd
+
+        # self.prefix_dropout_rate = getattr(config, "prefix_dropout_rate", 0.0)
+        self.prefix_dropout_rate = 0.1
+        self.prefix_seq_len = model_args.ztokens
+
+        # Model
+        # self.input_tokens = torch.arange(self.prefix_seq_len).long()
+        # self.prefix_wte = nn.Embedding(self.prefix_seq_len, config.input_dim)
+
+        # Since prefix-tuning append prefix to each layer, the shape is prefix_seq_len, n_layer, 2(query,key), n_embd
+        '''
+        self.prefix_mlp = nn.Sequential(
+            nn.Linear(self.input_dim, self.hidden_dim),
+            nn.ReLU(),
+            nn.Linear(self.hidden_dim, config.n_layer * 2 * config.n_embd),
+        )
+        '''
+        self.match_n_layer = model_args.shallow_decoder_n_layer
+        self.prefix_mlp = nn.Linear(
+            self.input_dim, self.match_n_layer * 2 * config.n_embd)
+
+        self.prefix_dropout = nn.Dropout(self.prefix_dropout_rate)
+
+        self.lns = nn.ModuleList(
+            [
+                nn.LayerNorm(
+                    2 * config.n_embd,
+                    eps = config.layer_norm_epsilon
+                ) 
+                for _ in range(self.match_n_layer)
+            ]
+        )
+
+        
+        self.match_n_head = config.n_head
+        self.match_n_embd = config.n_embd // config.n_head
+    def forward(
+        self,
+        input_embd,
+    ):
+        """
+        Return query & key values from prefix
+        """
+        # input_tokens = self.input_tokens.unsqueeze(0).expand(batch_size, -1).to(device)
+        # Forward
+        # input_embd = self.prefix_wte(input_tokens)
+
+        # B NZ H
+        batch_size = input_embd.size(0)
+
+        past_key_values = self.prefix_mlp(input_embd)
+
+        past_key_values = past_key_values.view(batch_size, self.prefix_seq_len, self.match_n_layer, -1)
+
+        past_key_values_new = []
+        for il, ln in enumerate(self.lns):
+            past_key_values_new.append(ln(past_key_values[:, :, il]))
+        past_key_values = torch.stack(past_key_values_new, dim=2)
+
+        # Resize
+        past_key_values = past_key_values.view(
+            batch_size,
+            self.prefix_seq_len,
+            self.match_n_layer * 2,
+            self.match_n_head,
+            self.match_n_embd,
+        )
+        # Dropout
+        # past_key_values = self.prefix_dropout(past_key_values)
+
+        # Transpose -> [match_n_layer*2, batch_size, match_n_head, prefix_seq_len, match_n_embd]
+        past_key_values = past_key_values.permute([2, 0, 3, 1, 4])
+        past_key_values = torch.split(past_key_values, 2)
+        
+        all_kvs = ()
+        for i in range(len(past_key_values)):
+            kvpair = (past_key_values[i][0], past_key_values[i][1])
+            all_kvs += (kvpair,)
+
+        return all_kvs
+    
 class PrefixEncoder(nn.Module):
     def __init__(self, config, model_args):
         super().__init__()
@@ -69,7 +158,8 @@ class PrefixEncoder(nn.Module):
         self.prefix_seq_len = model_args.ztokens
         self.match_n_layer = model_args.shallow_decoder_n_layer
         
-        self.prefix_mlp = nn.Linear(self.input_dim, self.match_n_layer * 2 * config.n_embd)
+        self.prefix_mlp = nn.Linear(
+            self.input_dim, self.match_n_layer * 2 * config.n_embd)
 
 
         self.match_n_head = config.n_head
@@ -586,9 +676,9 @@ class AE(GPT2LMHeadModel):
         # self.ln_2.bias.data.zero_()
         # self.ln_2.weight.data.fill_(1.0)
         
-        self.prefix_encoder = PrefixEncoder(config, model_args)
+        self.prefix_encoder = LnPrefixEncoder(config, model_args)
         self.proj = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
-        
+        self.post_init()
         
     def build_ed(self, model_args, main_decoder):
         if model_args.from_scratch:
