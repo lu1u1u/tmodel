@@ -6,7 +6,7 @@ from utils.training_utils import AverageMeter
 
 # Function to evaluate performance when generating
 @torch.no_grad()
-def evaluate(model, loader, ctx, temperature, top_k, results=None, mode='test'):
+def evaluate(model, loader, ctx, temperature, top_k, results=None, mode='test', accelerator = None):
     """
     Generates sequences (without teacher-forcing) and calculates accuracies
     """
@@ -27,7 +27,10 @@ def evaluate(model, loader, ctx, temperature, top_k, results=None, mode='test'):
         attn_mask = torch.ones_like(x)
         with ctx:
             #y_pred = model.generate(x, num_target_tokens, temperature=temperature, top_k=top_k)
-            y_pred = model.generate(
+            gen_model = model
+            if accelerator:
+                gen_model = accelerator.unwrap_model(model)
+            y_pred = gen_model.generate(
                 x, 
                 attention_mask = attn_mask.to('cuda'),
                 max_new_tokens = num_target_tokens, 
@@ -70,7 +73,7 @@ def evaluate(model, loader, ctx, temperature, top_k, results=None, mode='test'):
 
 # Function to evaluate performance when applying teacher forcing
 @torch.no_grad()
-def evaluate_forced(model, loader, ctx, results=None, mode='test'):
+def evaluate_forced(model, loader, ctx, results=None, mode='test', accelerator = None):
     """
     Generates sequences with teacher-forcing and calculates accuracies
     """
