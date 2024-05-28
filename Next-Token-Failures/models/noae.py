@@ -139,7 +139,7 @@ class NewTModel(GPT2PreTrainedModel):
                 output_hidden_states = True,
             )
             second_pass_hiddens = second_pass.hidden_states[-1][:,-self.ztokens:,:]
-            second_pass_hiddens = self.proj2(second_pass_hiddens)
+            second_pass_hiddens = self.proj1(second_pass_hiddens)
             second_pass_hiddens = second_pass_hiddens.reshape(-1,second_pass_hiddens.size(-1))
 
         #print(main_hidden_z.shape, ae_outs.hidden_z.shape)
