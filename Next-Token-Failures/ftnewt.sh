@@ -67,7 +67,7 @@ echo $lr
 
 logname=newt-suffix-$modelname-d$deg-p$path-ztokens$ztokens-a$a-b$b-zdim-$zdim-lr$lr
 python ./finetune.py \
-    --model $modelpath --enable_ae_decoder_emb_grad \
+    --model $modelpath \
     --desc $logname \
     --n_train 200000 \
     --n_test 20000 \
