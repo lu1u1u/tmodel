@@ -912,12 +912,10 @@ class NewTModel(GPT2PreTrainedModel):
         #print(f"preds: {preds[labels != -100]}")
         #print(f"golds: {labels[labels != -100]}")
         
-        acc = None
-        if not self.training:
-            preds = main_dec_outs.logits.argmax(dim=-1)
-            preds = preds[:, :-1]
-            labels = labels[:,1:]
-            acc = self.accuracy(preds, labels)
+        preds = main_dec_outs.logits.argmax(dim=-1)
+        preds = preds[:, :-1]
+        labels = labels[:,1:]
+        acc = self.accuracy(preds, labels)
         
         return main_dec_outs.logits, tloss if self.training else nllloss, acc
 
