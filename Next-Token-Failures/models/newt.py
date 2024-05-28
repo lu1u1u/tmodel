@@ -670,14 +670,19 @@ class AE(GPT2LMHeadModel):
         self.cross_attention.q_attn.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
         
         self.ln_1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
-        # self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.ln_1.bias.data.zero_()
         self.ln_1.weight.data.fill_(1.0)
-        # self.ln_2.bias.data.zero_()
-        # self.ln_2.weight.data.fill_(1.0)
+        self.ln_2.bias.data.zero_()
+        self.ln_2.weight.data.fill_(1.0)
         
-        self.prefix_encoder = LnPrefixEncoder(config, model_args)
-        self.proj = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
+        # self.prefix_encoder = LnPrefixEncoder(config, model_args)
+        self.prefix_encoder = PrefixEncoder(config, model_args)
+        
+        self.proj = None
+        if config.hidden_size > config.zdim:
+            self.proj = nn.Linear(config.hidden_size, config.zdim, bias=False)
+        
         self.post_init()
         
     def build_ed(self, model_args, main_decoder):
@@ -731,31 +736,28 @@ class AE(GPT2LMHeadModel):
         
 
         with torch.no_grad():
-
             enc_outs = self.transformer(
                 input_ids = input_ids_enc
             )
-
-    
         
         enc_lhs = enc_outs.last_hidden_state 
         
-        hidden_states_z = self.ln_1(hidden_states_z)
-        #enc_lhs = self.ln_1(enc_lhs)
-        
         residual = hidden_states_z
-        
+        hidden_states_z = self.ln_1(hidden_states_z)
+
         cross_outs = self.cross_attention(
             hidden_states = hidden_states_z,
             encoder_hidden_states = enc_lhs
         )
         
         hidden_z = cross_outs[0] + residual
-        # hidden_z = self.ln_2(hidden_z)
-        hidden_z = self.proj(hidden_z)
+
+        hidden_z = self.ln_2(hidden_z)
+
+        if self.proj is not None:
+            hidden_z = self.proj(hidden_z)
         
         past_key_values = self.prefix_encoder(hidden_z)
-        
 
         dec_outs = self.decoder(
             input_ids = input_ids_enc,
@@ -812,8 +814,10 @@ class NewTModel(GPT2PreTrainedModel):
         self.aemodel = AE(deepcopy(config), model_args)
         
         self.softmax = nn.Softmax(dim=-1)
-        
-        self.proj  = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
+
+        self.proj = None    
+        if model_args.zdim != config.hidden_size:
+            self.proj  = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
         
         
     def build_ed(self, len_tokenizer):
@@ -876,12 +880,13 @@ class NewTModel(GPT2PreTrainedModel):
             output_attentions = True
         )
 
-
         main_dec_lhs = main_dec_outs.hidden_states[-1] # bs seqlen h
         #'CausalLMOutputWithCrossAttentions' object has no attribute 'last_hidden_state' 
 
         main_hidden_z = main_dec_lhs[pos_mask]
-        main_hidden_z = self.proj(main_hidden_z)
+
+        if self.proj is not None:
+            main_hidden_z = self.proj(main_hidden_z)
         
         ae_outs = self.aemodel(
             input_ids_enc = input_ids_enc,
@@ -900,16 +905,20 @@ class NewTModel(GPT2PreTrainedModel):
             + self.beta * recloss  \
             + nllloss 
             
-        with open(f'./balance_logs/{self.model_args.spname}.txt', 'a') as f:
-           f.write(f"{self.training}; mseloss = {self.alpha} * {mseloss:.6f}, recloss = {self.beta} * {recloss:.6f}, nllloss = {nllloss:.6f}\n")
+        # with open(f'./balance_logs/{self.model_args.spname}.txt', 'a') as f:
+        print(f"{self.training}; mseloss = {self.alpha} * {mseloss:.6f}, recloss = {self.beta} * {recloss:.6f}, nllloss = {nllloss:.6f}")
 
-        preds = main_dec_outs.logits.argmax(dim=-1)
-        
-        preds = preds[:, :-1]
-        labels = labels[:,1:]
+
         #print(f"preds: {preds[labels != -100]}")
         #print(f"golds: {labels[labels != -100]}")
-        acc = self.accuracy(preds, labels)
+        
+        acc = None
+        if not self.training:
+            preds = main_dec_outs.logits.argmax(dim=-1)
+            preds = preds[:, :-1]
+            labels = labels[:,1:]
+            acc = self.accuracy(preds, labels)
+        
         return main_dec_outs.logits, tloss if self.training else nllloss, acc
 
     def accuracy(self, preds, labels):
