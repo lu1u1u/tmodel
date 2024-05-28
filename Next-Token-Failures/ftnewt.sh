@@ -1,11 +1,16 @@
-export PATH=/home/yinyongjing/anaconda3/bin/:$PATH
-source activate minilm
+cd /yinyongjing/junran/cgae/tmodel-master/Next-Token-Failures/
+export PATH=/yinyongjing/anaconda3/bin/:$PATH
+source activate jr
 gpu=0
 export CUDA_VISIBLE_DEVICES=$gpu
+export TRANSFORMERS_CACHE=/yinyongjing/hfcache/
+export HF_HOME=/yinyongjing/hfcache/
+export HF_ENDPOINT=https://hf-mirror.com
+modelname="e" # TODO: in ['mini', 's', 'm', 'l', 'e']
 
-modelname="l" # TODO: in ['mini', 's', 'm', 'l']
-
-lr=1e-4
+dp=0.1
+wd=0.01
+lr=1e-5
 ep=100 
 nn=50 # num_nodes
 deg=${1}
@@ -24,14 +29,14 @@ fi
 
 if  [ "$modelname" = "s" -o "$modelname" = "mini" ];
 then
-    modelpath=/data3/home/fulian/djr/small
+    modelpath=/yinyongjing/hfmodels/gpt2_small
     bs=128
 fi
 
 if  [ "$modelname" = "mini" ];
 then
     ep=500
-    lr=5e-4
+    lr=5e-5
 fi
 
 
@@ -43,8 +48,14 @@ fi
 
 if  [ "$modelname" = "l" ];
 then
-    modelpath=/data3/home/fulian/djr/large
-    bs=32
+    modelpath=/yinyongjing/hfmodels/gpt2/large
+    bs=16
+fi
+
+if  [ "$modelname" = "e" ];
+then
+    modelpath='EleutherAI/gpt-neo-125M'
+    bs=512
 fi
 
 echo $modelpath
@@ -56,7 +67,7 @@ echo $lr
 
 logname=newt-suffix-$modelname-d$deg-p$path-ztokens$ztokens-a$a-b$b-zdim-$zdim-lr$lr
 python ./finetune.py \
-    --model $modelpath \ 
+    --model $modelpath --enable_ae_decoder_emb_grad \
     --desc $logname \
     --n_train 200000 \
     --n_test 20000 \
@@ -68,8 +79,10 @@ python ./finetune.py \
     --path $path \
     --a $a \
     --b $b \
-    --zdim $zdim \ # -1 stands for model_size
+    --zdim $zdim \
     --ztokens $ztokens \
+    --weight_decay $wd \
+    --dp $dp \
     --snl $snl \
     --num_nodes $nn \
     --save_every 500000 \
