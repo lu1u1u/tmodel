@@ -50,6 +50,10 @@ parser.add_argument(
 parser.add_argument(
         "--weight_decay", type=float, default=1e-2, help="Strength of weight decay",
     )
+
+parser.add_argument(
+        "--dp", type=float, default=0.1, help="dropout",
+    )
 parser.add_argument(
         "--epochs", type=int, default=100, help="Number of epochs",
     )
@@ -120,10 +124,18 @@ parser.add_argument(
 parser.add_argument(
         "--use_new",  action = 'store_true', default = False, help = 'use_newnew',
     )
+parser.add_argument(
+        "--no_ae",  action = 'store_true', default = False, help = 'use_noae',
+    )
 
 parser.add_argument(
         "--ae_model_name_or_path",  type=str, default = 'gpt2', help = 'ae_path',
     )
+
+parser.add_argument(
+        "--enable_ae_decoder_emb_grad",  action = 'store_true', default = False, help = 'enable_ae_decoder_emb_grad',
+    )
+
 
 args = parser.parse_args()
 if args.use_new:
