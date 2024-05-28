@@ -24,8 +24,8 @@ def get_model(args, **kwargs):
 
     elif args.model.startswith('pythia'):
         model = Pythia.from_pretrained(args.model, teacherless_token=args.teacherless_token)
-    elif args.model.startswith('/data3/home'):
-        
+    #elif args.model.startswith('/yinyongjing/') or args.model.startswith('EleutherAI'):
+    else:   
         model_args = kwargs.get("model_args")
         config = AutoConfig.from_pretrained(model_args.model_name_or_path)
         # added
@@ -34,9 +34,13 @@ def get_model(args, **kwargs):
             assert 'small' in args.model
             config.update(
                 {
-                    "n_layer" : 12,
+                    "n_layer" : 6,
                     "n_embd" : 384,
                     "n_head" : 6,
+                    "resid_pdrop" : args.dp, 
+                    "embd_pdrop" : args.dp,
+                    "summary_first_dropout" : args.dp,
+                    "hidden_dropout_prob" : args.dp
                 }
             )
         config.update(
@@ -44,19 +48,24 @@ def get_model(args, **kwargs):
                 "ztokens" : model_args.ztokens,
                 "zdim" : model_args.zdim,
                 "z_start_id" : tokenizer.z_start_id,
-                "len_tokenizer": tokenizer.vocab_size
+                "len_tokenizer": tokenizer.vocab_size,
+                "enable_ae_decoder_emb_grad" : args.enable_ae_decoder_emb_grad
             }
         )
-
         if model_args.use_flash_attention:
             config._attn_implementation = "flash_attention_2"
             
         if args.use_new:
             from models.newnew import NewTModel
-            tmodel = NewTModel(config = config, model_args = model_args)
+        elif args.no_ae:
+            from models.noae import NewTModel
+        elif 'neo' in args.model:
+            from models.neo import NewTModel
         else:
             from models.newt import NewTModel
-            tmodel = NewTModel(config = config, model_args = model_args)
+            
+        tmodel = NewTModel(config = config, model_args = model_args)
+        if hasattr(tmodel, "build_ed"):
             tmodel.build_ed(tokenizer.vocab_size)
         print(tmodel)
     return tmodel
