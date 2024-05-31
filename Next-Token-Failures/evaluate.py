@@ -81,7 +81,7 @@ def evaluate_forced(model, loader, ctx, results=None, mode='test', accelerator =
     total_acc, total_loss = AverageMeter(), AverageMeter()
     tokens_corr = {i: AverageMeter() for i in range(num_target_tokens)}
     bar = tqdm(loader)
-
+    model.eval()
     for tp in bar:
         # Produce logits with teacher-forcing (i.e. like during training)
         with ctx:
@@ -100,5 +100,5 @@ def evaluate_forced(model, loader, ctx, results=None, mode='test', accelerator =
         results[mode + '/forced accuracy'] = total_acc.get(percentage=True)
         for i in range(num_target_tokens):
             results[mode + '/token_' + str(i + 1)] = tokens_corr[i].get(percentage=True)
-
+    model.train()
     return results
