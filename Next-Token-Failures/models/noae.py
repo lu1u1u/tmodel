@@ -14,7 +14,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.cuda.amp import autocast
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-
+from contextlib import nullcontext
 from transformers.models.gpt2 import GPT2LMHeadModel, GPT2Model
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 from transformers.activations import ACT2FN
@@ -59,7 +59,12 @@ from transformers.modeling_outputs import (
 
 logger = logging.get_logger(__name__)
 
-
+class DummyLinear:
+    def __init__(self):
+        pass
+    def __call__(self, x):
+        return x
+    
 class NewTModel(GPT2PreTrainedModel):
     def __init__(self, config, model_args):
         print("*******************************")
@@ -74,19 +79,28 @@ class NewTModel(GPT2PreTrainedModel):
         
         self.alpha = model_args.alpha
         self.beta = model_args.beta
-        
+        self.m = model_args.m
         self.model_args = model_args
         
-        self.mseloss = F.smooth_l1_loss
-        #self.mseloss = nn.MSELoss()
+        self.mseloss = F.smooth_l1_loss if model_args.msenorm == 1 else nn.MSELoss()
             
         self.main_decoder = GPT2LMHeadModel(self.config)
         
         self.softmax = nn.Softmax(dim=-1)
+        if model_args.zdim == config.hidden_size:
+            self.proj1 = DummyLinear()
+        else:
+            self.proj1 = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
         
-        self.proj1 = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
-        self.proj2 = nn.Linear(config.hidden_size, model_args.zdim, bias=False)
+        assert not model_args.use_separate
+        if model_args.use_ema:
+            self.encoder = GPT2LMHeadModel(self.config)
+        else:
+            self.encoder = self.main_decoder
         
+        self.context = torch.no_grad()
+
+            
     def build_ed(self, len_tokenizer):
 
         if not self.model_args.from_scratch:
@@ -95,9 +109,30 @@ class NewTModel(GPT2PreTrainedModel):
                 from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
                 config=self.config
             )
+            if self.model_args.use_ema:
+                self.encoder = AutoModelForCausalLM.from_pretrained(
+                    self.model_args.model_name_or_path,
+                    from_tf=bool(".ckpt" in self.model_args.model_name_or_path),
+                    config=self.config
+                )
+                self.encoder.resize_token_embeddings(len_tokenizer)
         self.resize_token_embeddings(len_tokenizer)
+        # tie encoder again
+        if not self.model_args.use_ema:
+            self.encoder = self.main_decoder
 
-        
+
+
+    @torch.no_grad()    
+    def _momentum_update_encoder(self):
+        """
+        Momentum update of the encoder
+        """
+        for param_enc, param_dec in zip(
+            self.encoder.transformer.parameters(), self.main_decoder.transformer.parameters()
+        ):
+            param_enc.data = param_enc.data * self.m + param_dec.data * (1.0 - self.m)
+       
     def resize_token_embeddings(self, len_t):
         self.main_decoder.resize_token_embeddings(len_t)
         
@@ -132,8 +167,8 @@ class NewTModel(GPT2PreTrainedModel):
         main_hidden_z = main_dec_lhs[pos_mask]
         main_hidden_z = self.proj1(main_hidden_z)
         
-        with torch.no_grad():
-            second_pass = self.main_decoder(
+        with self.context:
+            second_pass = self.encoder(
                 input_ids = torch.cat((input_ids_enc, input_ids_enc_z), dim=-1), 
                 labels = None,
                 output_hidden_states = True,
@@ -151,8 +186,8 @@ class NewTModel(GPT2PreTrainedModel):
         tloss = self.alpha * mseloss  \
             + nllloss 
             
-        with open(f'./balance_logs/{self.model_args.spname}.txt', 'a') as f:
-           f.write(f"{self.training}; mseloss = {self.alpha} * {mseloss:.6f}, nllloss = {nllloss:.6f}\n")
+        
+        print(f"{self.training}; mseloss = {self.alpha} * {mseloss:.6f}, nllloss = {nllloss:.6f}\n")
 
         preds = main_dec_outs.logits.argmax(dim=-1)
         
