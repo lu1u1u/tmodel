@@ -6,10 +6,10 @@ export CUDA_VISIBLE_DEVICES=$gpu
 export TRANSFORMERS_CACHE=/yinyongjing/hfcache/
 export HF_HOME=/yinyongjing/hfcache/
 export HF_ENDPOINT=https://hf-mirror.com
-modelname="e" # TODO: in ['mini', 's', 'm', 'l', 'e']
+modelname="mini" # TODO: in ['mini', 's', 'm', 'l', 'e']
 
-dp=0.1
-wd=0.01
+dp=0.3 # TODO: 根据模型修改
+wd=0.1 # TODO: 根据模型修改
 lr=1e-5
 ep=100 
 nn=50 # num_nodes
@@ -30,7 +30,7 @@ fi
 if  [ "$modelname" = "s" -o "$modelname" = "mini" ];
 then
     modelpath=/yinyongjing/hfmodels/gpt2_small
-    bs=128
+    bs=256
 fi
 
 if  [ "$modelname" = "mini" ];
@@ -64,10 +64,18 @@ echo $nn
 echo $lr
 
 
+# --from_scratch 
+# --use_minigpt 使用 mini gpt: 12 n_layer，384 hz, 6 heads
+# --no_ae 使用 no_ae 模型
+# --use_separate 不令 ae encoder == main_deocder (支持 newt)
+# --use_ema 使用 ema 方法更新 newt ae enc (支持 newt 和 noae)
+#   --m 如果使用 --use_ema, 设置动量
+# --enable_ae_decoder_emb_grad ：ae decoder的 embd 层会产生梯度
+# --weaken_dec ：ae decoder的输入会全部变为<bos>
 
-logname=newt-suffix-$modelname-d$deg-p$path-ztokens$ztokens-a$a-b$b-zdim-$zdim-lr$lr
+logname=newt530-suffix-$modelname-d$deg-p$path-ztokens$ztokens-a$a-b$b-zdim-$zdim-lr$lr
 python ./finetune.py \
-    --model $modelpath \
+    --model $modelpath --from_scratch --use_minigpt --use_ema --m 0.999 \
     --desc $logname \
     --n_train 200000 \
     --n_test 20000 \
@@ -86,6 +94,7 @@ python ./finetune.py \
     --snl $snl \
     --num_nodes $nn \
     --save_every 500000 \
-    --lr $lr > ./newtlogs/log.$logname 2>&1
+    --lr $lr > ./nnn530/log.$logname 2>&1
 
     #--from_scratch --use_minigpt \
+
