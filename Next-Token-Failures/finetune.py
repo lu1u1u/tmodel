@@ -54,6 +54,15 @@ parser.add_argument(
 parser.add_argument(
         "--dp", type=float, default=0.1, help="dropout",
     )
+
+parser.add_argument(
+        "--min_lr", type=float, default=1e-6, help="dropout",
+    )
+
+parser.add_argument(
+        "--m", type=float, default=0.999, help="mom",
+    )
+
 parser.add_argument(
         "--epochs", type=int, default=100, help="Number of epochs",
     )
@@ -129,6 +138,10 @@ parser.add_argument(
     )
 
 parser.add_argument(
+        "--weaken_dec",  action = 'store_true', default = False, help = 'use_noae',
+    )
+
+parser.add_argument(
         "--ae_model_name_or_path",  type=str, default = 'gpt2', help = 'ae_path',
     )
 
@@ -136,10 +149,24 @@ parser.add_argument(
         "--enable_ae_decoder_emb_grad",  action = 'store_true', default = False, help = 'enable_ae_decoder_emb_grad',
     )
 
+parser.add_argument(
+        "--use_ema",  action = 'store_true', default = False, help = 'use_ema',
+    )
+
+parser.add_argument(
+        "--use_separate",  action = 'store_true', default = False, help = 'use_separate',
+    )
+
+
 
 args = parser.parse_args()
 if args.use_new:
     print('Using newnew model instead of newt...')
+if args.no_ae:
+    print('Using noae instead of newt...')
+if args.use_separate:
+    assert not args.no_ae
+
 class ModelArguments:
     model_name_or_path = args.model
     ae_model_name_or_path = args.ae_model_name_or_path
@@ -153,22 +180,44 @@ class ModelArguments:
     znorm = args.znorm
     use_flash_attention = args.use_flash_attention 
     from_scratch = args.from_scratch
+    weaken_dec = args.weaken_dec
+    use_ema = args.use_ema
+    use_separate = args.use_separate
+    m = args.m
+    msenorm = 1 # 1 : l1; 2 : l2
     
 model_args = ModelArguments()   
-print("=================================================")
+
+print("====================Training Details=====================")
+print("spname = ", model_args.spname)
 print("model_name_or_path = ",model_args.model_name_or_path)
-print("ae_model_name_or_path = ", model_args.ae_model_name_or_path)
+print(f"lr = {args.lr}, min_lr = {args.min_lr}")
+print("use_flash_attention = ", model_args.use_flash_attention)
+print(f"no_ae = {args.no_ae}")
+print(f"use_ema = {model_args.use_ema}")
+if not args.use_new and args.use_ema:
+    print(" => m = ", model_args.m)
+print(f"use_separate = {model_args.use_separate}")
+print("\n")
+
+print("====================Data Details=====================")
 print("ztokens = ",model_args.ztokens)
 print("zdim = ", model_args.zdim)
+print("use full encstr = ", model_args.fullenc)
+print("\n")
+
+print("====================Model Details=====================")
+print("from_scratch = ", model_args.from_scratch)
 print("shallow_decoder_n_layer = ", model_args.shallow_decoder_n_layer)
 print("alpha = ", model_args.alpha)
 print("beta = ", model_args.beta)
-print("spname = ", model_args.spname)
-print("use full encstr = ", model_args.fullenc)
-print("znorm = ", model_args.znorm)
-print("use_flash_attention = ", model_args.use_flash_attention)
-print("from_scratch = ", model_args.from_scratch)
-print("=================================================")
+print("weaken_dec = ", model_args.weaken_dec)
+print("\n")
+
+print("====================Others=====================")
+print("ae_model_name_or_path(not used) = ", model_args.ae_model_name_or_path)
+print("znorm(not used) = ", model_args.znorm)
+print("\n")
 
 
 # System stuff
@@ -197,7 +246,7 @@ decay_lr = True
 args.compile = False if device == 'cuda' else False
 args.use_flash = True if device == 'cuda' else False
 warmup_iters = 100
-min_lr = 1e-5
+min_lr = args.min_lr
 
 run_name = get_run_name(args)
 path = './checkpoints/' + run_name + '.pt'
@@ -257,10 +306,13 @@ for ep in range(args.epochs):
         total_ptk_acc.update(accs['token_acc'], tp[0].shape[0])
         total_loss.update(loss.item(), tp[0].shape[0] * train_data.num_target_tokens)
         total_acc.update(accs['acc'], tp[0].shape[0] * train_data.num_target_tokens)
-        scaler.scale(loss).backward()
+        scaler.scale(loss).backward()            
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
+        # ema
+        if args.use_ema:
+            model._momentum_update_encoder()
         num_iters += 1
         train_bar.set_description(
             'Epoch: [{}/{}] Loss: {:.4f} Acc: {:.2f} Ptk: {}'.format(ep, args.epochs, total_loss.get(),
