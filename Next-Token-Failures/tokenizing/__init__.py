@@ -83,14 +83,17 @@ def get_tokenizer(args, **kwargs):
     elif args.model.startswith('phi'):
         t = AutoTokenizer.from_pretrained("microsoft/phi-2", trust_remote_code=True)
         tokenizer = Tokenizer(encoder=t.encode, decoder=t.decode, vocab_size=51200, name='phi')
-    elif args.model.startswith('/data3/home'):
+    #elif args.model.startswith('/yinyongjing/') or args.model.startswith('EleutherAI'):
+    else:  
         t = AutoTokenizer.from_pretrained(args.model)
         model_args = kwargs.get("model_args")
-        special_list = [f'<THO{idx}>' for idx in range(model_args.ztokens)]
-        special_seq = ''.join(special_list)
-        print(special_list)
-        print(special_seq)
-        t.add_special_tokens({'additional_special_tokens':special_list})
+        if model_args.ztokens > 0:
+            special_list = [f'<THO{idx}>' for idx in range(model_args.ztokens)]
+            special_seq = ''.join(special_list)
+            print(special_list)
+            print(special_seq)
+            t.add_special_tokens({'additional_special_tokens':special_list})
+
         print(t)
         tokenizer = ZTokenizer(
             encoder=t.encode, 
@@ -100,8 +103,12 @@ def get_tokenizer(args, **kwargs):
             model_args=model_args, 
             tokenizer = t
         )
-        tokenizer.zseq = tokenizer.encode(special_seq)
-        tokenizer.z_start_id = tokenizer.encode('<THO0>')[0]
-        print("zseq:",tokenizer.zseq)
-        print("z_start_id:",tokenizer.z_start_id)
+        tokenizer.zseq = None
+        tokenizer.z_start_id = None
+        if model_args.ztokens > 0:
+            tokenizer.zseq = tokenizer.encode(special_seq)
+            tokenizer.z_start_id = tokenizer.encode('<THO0>')[0]
+            print("zseq:",tokenizer.zseq)
+            print("z_start_id:",tokenizer.z_start_id)
+
     return tokenizer
