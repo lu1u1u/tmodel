@@ -61,6 +61,8 @@ def get_model(args, **kwargs):
             from models.noae import NewTModel
         elif 'neo' in args.model:
             from models.neo import NewTModel
+        elif args.use_kt:
+            from models.kt import KT as NewTModel
         else:
             from models.newt import NewTModel
             
