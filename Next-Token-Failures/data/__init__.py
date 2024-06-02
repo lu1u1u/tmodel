@@ -10,6 +10,7 @@ def get_dataset(args, tokenizer, device):
     else:
         teacherless_token = None
 
+        
     if args.dataset == 'chess':
         data_path = './data/datasets/chess/mate_in_' + str(args.mate_in)
         train_path, test_path = data_path + '_train.json', data_path + '_test.json'
@@ -22,8 +23,13 @@ def get_dataset(args, tokenizer, device):
         data_path = './data/datasets/graphs/deg_' + str(args.deg) + '_path_' + str(args.path_len) + '_nodes_' + \
                     str(args.num_nodes)
         train_path, test_path = data_path + '_train_200000.txt', data_path + '_test_20000.txt'
-        
-        if args.use_new:
+        if args.use_kt:
+            print("using original dataset...")
+            train_data = Graphs(tokenizer=tokenizer, n_samples=args.n_train, data_path=train_path, device=device,
+                            teacherless_token=teacherless_token, reverse=args.reverse)
+            test_data = Graphs(tokenizer=tokenizer, n_samples=args.n_test, data_path=test_path, device=device,
+                           teacherless_token=teacherless_token, reverse=args.reverse)
+        elif args.use_new:
             train_data = NZGraphs(tokenizer=tokenizer, n_samples=args.n_train, data_path=train_path, device=device,
                             teacherless_token=teacherless_token, reverse=args.reverse)
             test_data = NZGraphs(tokenizer=tokenizer, n_samples=args.n_test, data_path=test_path, device=device,
