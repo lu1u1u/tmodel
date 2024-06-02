@@ -88,8 +88,6 @@ class KT(GPT2LMHeadModel):
         
         
     
-    def generate(self,*args, **kwargs):
-        return self.transformer.generate(*args, **kwargs)
     
 
     def forward(
