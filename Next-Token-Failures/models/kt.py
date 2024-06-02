@@ -26,11 +26,12 @@ class KTOutput(ModelOutput):
  
     loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None
-    acc: dict = None
     past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
     hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
     attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
     cross_attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    acc: dict = None
+    
     
 from transformers import (
     AutoModel,
@@ -87,7 +88,7 @@ class KT(GPT2LMHeadModel):
         self.r_init_weights(self.sub_heads)
         
         
-    
+
     
 
     def forward(
@@ -109,7 +110,7 @@ class KT(GPT2LMHeadModel):
     ):
         #print("input_ids = ",input_ids)
         #print("labels = ", labels)
-
+        
         transformer_outputs = self.transformer(
             input_ids,
             past_key_values=past_key_values,
@@ -182,6 +183,16 @@ class KT(GPT2LMHeadModel):
             labels = labels[:,1:block_size]
             acc = self.accuracy(preds, labels)
             
+        if labels is None:
+
+            return CausalLMOutputWithCrossAttentions(
+                loss=loss,
+                logits=lm_logits,
+                past_key_values=transformer_outputs.past_key_values,
+                hidden_states=transformer_outputs.hidden_states,
+                attentions=transformer_outputs.attentions,
+                cross_attentions=transformer_outputs.cross_attentions,
+            )
         return KTOutput(
             loss=loss,
             logits=lm_logits,
