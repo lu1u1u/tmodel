@@ -175,11 +175,14 @@ if args.no_ae:
     print('Using noae instead of newt...')
 if args.use_separate:
     assert not args.no_ae
+if args.use_kt:
+    args.ztokens = 0
+    
 
 class ModelArguments:
     model_name_or_path = args.model
     ae_model_name_or_path = args.ae_model_name_or_path
-    ztokens = args.ztokens
+    ztokens = args.ztokens 
     zdim = args.zdim
     shallow_decoder_n_layer = args.snl
     alpha = args.a
