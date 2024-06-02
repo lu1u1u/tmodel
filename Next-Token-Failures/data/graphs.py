@@ -148,16 +148,20 @@ class Graphs(Dataset):
         # Create inputs
         
         
-        x = self.tokenized[idx][:-1].clone()
+        x = self.tokenized[idx].clone()
         if self.teacherless_token is not None:
+            assert 0, 'not implemented'
             x[self.num_prefix_tokens:] = self.teacherless_token
             x = x.to(self.device)
         # Create targets in the form [-1, ..., -1, 4, 7, 9, 2, ...] where we replace the prefix tokens by -1 so that
         # we can skip their gradient calculation in the loss (double-check if that's correct)
-        y = torch.cat([-torch.ones((self.num_prefix_tokens - 1, )),
+        y = torch.cat([-100*torch.ones((self.num_prefix_tokens,)),
                        self.tokenized[idx][self.num_prefix_tokens:].clone()])
 
-        return x.to(self.device), y.long().to(self.device)
+        return {
+            "input_ids" : x.to(self.device), 
+            "labels" : y.long().to(self.device)
+        }
 
     def eval(self):
         # Switch to "eval" mode when generating sequences without teacher-forcing
@@ -387,12 +391,15 @@ if __name__ == '__main__':
     n_test = 20000
     # TODO : genrate more datasets
     # eg. (20,10), (10,20), (2,30), (2,40), (5,20) ...
-    deg = 20 # TODO : change deg
-    path_len = 10 # TODO : change pathlen
+    deg = 5 # TODO : change deg
+    path_len = 30 # TODO : change pathlen
     
     num_nodes = deg * path_len
     reverse = False
-    generate_and_save(n_train=n_train, n_test=n_test, degSource=deg, pathLen=path_len, numNodes=num_nodes,
+    for tp in tqdm.tqdm([(15,15)]):
+        deg, path_len = tp
+        num_nodes = max(50, deg * path_len)
+        generate_and_save(n_train=n_train, n_test=n_test, degSource=deg, pathLen=path_len, numNodes=num_nodes,
                       reverse=reverse)
 
     """
