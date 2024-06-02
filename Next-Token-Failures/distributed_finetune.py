@@ -184,6 +184,8 @@ if args.no_ae:
     print('Using noae instead of newt...')
 if args.use_separate:
     assert not args.no_ae
+if args.use_kt:
+    args.ztokens = 0
 
 class ModelArguments:
     model_name_or_path = args.model
