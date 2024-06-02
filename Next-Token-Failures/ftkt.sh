@@ -74,7 +74,7 @@ echo $ep
 
 logname=pr-paper-KT-suffix-k$k-$modelname-d$deg-p$path-lr$lr
 accelerate launch --mixed_precision fp16 --multi_gpu ./distributed_finetune.py \
-    --model $modelpath --use_kt --k $k --use_flash_attention \
+    --model $modelpath --use_kt --k $k \
     --disable_search_unused_parameters \
     --desc $logname \
     --n_train 200000 \
