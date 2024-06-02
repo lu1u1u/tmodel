@@ -68,13 +68,13 @@ class KT(GPT2LMHeadModel):
         super().__init__(config)
         model_args.k = max(model_args.k, 1)
         self.model_args = model_args
-        pree = AutoModelForCausalLM.from_pretrained(
+        self.pree = AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
             config=self.config,
         )
-        self.transformer = pree.transformer
-        self.lm_head = pree.lm_head
+        self.transformer = self.pree.transformer
+        self.lm_head = self.pree.lm_head
         self.sub_heads = nn.ModuleList(
             [
                 nn.Linear(self.config.n_embd, self.config.vocab_size, bias=False)
@@ -87,9 +87,8 @@ class KT(GPT2LMHeadModel):
         #print(self.sub_heads)
         self.r_init_weights(self.sub_heads)
         
-        
-
-    
+    def generate(self, *args,**kwargs):
+        return self.pree.generate(*args,**kwargs)
 
     def forward(
         self,
