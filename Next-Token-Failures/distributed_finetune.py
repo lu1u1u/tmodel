@@ -2,7 +2,7 @@ import argparse
 from contextlib import nullcontext
 import torch
 from tqdm import tqdm
-
+from accelerate import Accelerator
 from data import get_dataset
 from utils.training_utils import get_lr, get_run_name, AverageMeter
 from torch.utils.data import DataLoader
@@ -10,7 +10,9 @@ from evaluate import evaluate, evaluate_forced
 from models import get_model
 from tokenizing import get_tokenizer
 import wandb
-from accelerate import Accelerator
+import threading
+from accelerate import DistributedDataParallelKwargs
+
 
 # Parse arguments
 parser = argparse.ArgumentParser(description="Next-token failures")
@@ -51,6 +53,19 @@ parser.add_argument(
 parser.add_argument(
         "--weight_decay", type=float, default=1e-2, help="Strength of weight decay",
     )
+
+parser.add_argument(
+        "--dp", type=float, default=0.1, help="dropout",
+    )
+
+parser.add_argument(
+        "--min_lr", type=float, default=1e-6, help="dropout",
+    )
+
+parser.add_argument(
+        "--m", type=float, default=0.999, help="mom",
+    )
+
 parser.add_argument(
         "--epochs", type=int, default=100, help="Number of epochs",
     )
@@ -121,14 +136,55 @@ parser.add_argument(
 parser.add_argument(
         "--use_new",  action = 'store_true', default = False, help = 'use_newnew',
     )
+parser.add_argument(
+        "--no_ae",  action = 'store_true', default = False, help = 'use_noae',
+    )
+
+parser.add_argument(
+        "--weaken_dec",  action = 'store_true', default = False, help = 'use_noae',
+    )
 
 parser.add_argument(
         "--ae_model_name_or_path",  type=str, default = 'gpt2', help = 'ae_path',
     )
 
+parser.add_argument(
+        "--enable_ae_decoder_emb_grad",  action = 'store_true', default = False, help = 'enable_ae_decoder_emb_grad',
+    )
+
+parser.add_argument(
+        "--use_ema",  action = 'store_true', default = False, help = 'use_ema',
+    )
+
+parser.add_argument(
+        "--use_separate",  action = 'store_true', default = False, help = 'use_separate',
+    )
+
+parser.add_argument(
+        "--use_kt",  action = 'store_true', default = False, help = 'use_predict_k_tokens',
+    )
+
+parser.add_argument(
+        "--k", type=int, default=3, help="kt num heads",
+    )
+
+parser.add_argument(
+        "--disable_search_unused_parameters",  action = 'store_true', default = False, help = 'd',
+    )
 args = parser.parse_args()
+
+# Parallel
+ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=not args.disable_search_unused_parameters)
+accelerator = Accelerator(mixed_precision = 'fp16', kwargs_handlers=[ddp_kwargs])
+
+
 if args.use_new:
     print('Using newnew model instead of newt...')
+if args.no_ae:
+    print('Using noae instead of newt...')
+if args.use_separate:
+    assert not args.no_ae
+
 class ModelArguments:
     model_name_or_path = args.model
     ae_model_name_or_path = args.ae_model_name_or_path
@@ -142,28 +198,54 @@ class ModelArguments:
     znorm = args.znorm
     use_flash_attention = args.use_flash_attention 
     from_scratch = args.from_scratch
+    weaken_dec = args.weaken_dec
+    use_ema = args.use_ema
+    use_separate = args.use_separate
+    m = args.m
+    k = args.k
+    msenorm = 1 # 1 : l1; 2 : l2
     
 model_args = ModelArguments()   
-print("=================================================")
-print("model_name_or_path = ",model_args.model_name_or_path)
-print("ae_model_name_or_path = ", model_args.ae_model_name_or_path)
-print("ztokens = ",model_args.ztokens)
-print("zdim = ", model_args.zdim)
-print("shallow_decoder_n_layer = ", model_args.shallow_decoder_n_layer)
-print("alpha = ", model_args.alpha)
-print("beta = ", model_args.beta)
-print("spname = ", model_args.spname)
-print("use full encstr = ", model_args.fullenc)
-print("znorm = ", model_args.znorm)
-print("use_flash_attention = ", model_args.use_flash_attention)
-print("from_scratch = ", model_args.from_scratch)
-print("=================================================")
+def print_settings():
+    print("====================Training Details=====================")
+    print("spname = ", model_args.spname)
+    print("model_name_or_path = ",model_args.model_name_or_path)
+    print(f"lr = {args.lr}, min_lr = {args.min_lr}")
+    print("use_flash_attention = ", model_args.use_flash_attention)
+    print(f"no_ae = {args.no_ae}")
+    print(f"use_ema = {model_args.use_ema}")
+    if not args.use_new and args.use_ema:
+        print(" => m = ", model_args.m)
+    print("use_kt = ", args.use_kt)
+    if args.use_kt:
+        print(" => k = ", model_args.k)
+    print(f"use_separate = {model_args.use_separate}")
+    print("\n")
 
-# Parallel
-accelerator = Accelerator()
+    print("====================Data Details=====================")
+    print("ztokens = ",model_args.ztokens)
+    print("zdim = ", model_args.zdim)
+    print("use full encstr = ", model_args.fullenc)
+    print("\n")
 
+    print("====================Model Details=====================")
+    print("from_scratch = ", model_args.from_scratch)
+    print("shallow_decoder_n_layer = ", model_args.shallow_decoder_n_layer)
+    print("alpha = ", model_args.alpha)
+    print("beta = ", model_args.beta)
+    print("weaken_dec = ", model_args.weaken_dec)
+    print("\n")
+
+    print("====================Others=====================")
+    print("ae_model_name_or_path(not used) = ", model_args.ae_model_name_or_path)
+    print("znorm(not used) = ", model_args.znorm)
+    print("\n")
+    
+
+with threading.Lock():
+    print_settings()
 # System stuff
-#device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 wandb_entity = args.wandb_entity
 wandb_log = args.use_wandb
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -180,22 +262,22 @@ eval_interval = 5
 log_interval = 10
 
 # Optimiser
-dtype = 'bfloat16'
+dtype = 'float16'
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 beta1 = 0.9
 beta2 = 0.999
 decay_lr = True
-args.compile = False #if device == 'cuda' else False
-args.use_flash = True #if device == 'cuda' else False
+args.compile = False if device == 'cuda' else False
+args.use_flash = True if device == 'cuda' else False
 warmup_iters = 100
-min_lr = 1e-5
+min_lr = args.min_lr
 
 run_name = get_run_name(args)
 path = './checkpoints/' + run_name + '.pt'
 
 # Get tokenizer and de-tokenizer
 tokenizer = get_tokenizer(args, model_args=model_args)
-train_data, test_data = get_dataset(args, tokenizer, accelerator.device)
+train_data, test_data = get_dataset(args, tokenizer, device)
 
 train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
 test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=True)
@@ -215,15 +297,18 @@ if args.compile:
     print("compiling the model... (takes a ~minute)")
     model = torch.compile(model)
 
+
+
+model.train()
+
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'bfloat16'))
+scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0)
-ctx = nullcontext()
+ctx = nullcontext() if device == 'cpu' else torch.amp.autocast(device_type=device, dtype=ptdtype)
 
 model, optimizer, train_loader, test_loader = accelerator.prepare(
     model, optimizer, train_loader, test_loader)
 
-model.train()
 # Setup wandb logging
 if wandb_log:
     wandb.init(project='next-token-failures', entity=wandb_entity, config=args.__dict__,)
@@ -243,17 +328,30 @@ for ep in range(args.epochs):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
-        with accelerator.accumulate(model):
-            logits, loss, accs = model(*tp)
-
-            total_ptk_acc.update(accs['token_acc'], tp[0].shape[0])
-            total_loss.update(loss.item(), tp[0].shape[0] * train_data.num_target_tokens)
-            total_acc.update(accs['acc'], tp[0].shape[0] * train_data.num_target_tokens)
+        with accelerator.accumulate(model), ctx:
+            if isinstance(tp, list) or isinstance(tp, tuple):
+                logits, loss, accs = model(*tp)
+                bs = tp[0].shape[0]
+                
+            elif isinstance(tp, dict):
+                ret = model(**tp)
+                loss = ret.loss
+                logits = ret.logits
+                accs = ret.acc 
+                bs = tp['input_ids'].shape[0]
+            else:
+                assert 0
+            
+            total_ptk_acc.update(accs['token_acc'], bs)
+            total_loss.update(loss.item(), bs * train_data.num_target_tokens)
+            total_acc.update(accs['acc'], bs * train_data.num_target_tokens)
             accelerator.backward(scaler.scale(loss))
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
-
+            # ema
+            if args.use_ema:
+                model._momentum_update_encoder()
         num_iters += 1
         train_bar.set_description(
             'Epoch: [{}/{}] Loss: {:.4f} Acc: {:.2f} Ptk: {}'.format(ep, args.epochs, total_loss.get(),
@@ -268,8 +366,8 @@ for ep in range(args.epochs):
                 results = evaluate(model, train_loader, temperature=0.8, top_k=top_k, results=results, mode='Train')
                 results = evaluate_forced(model, train_loader, results=results, mode='train')
 
-            results = evaluate(model, test_loader, temperature=0.8, ctx = ctx, accelerator=accelerator, top_k=top_k, results=results, mode='Test')
-            results = evaluate_forced(model, test_loader, ctx = ctx, accelerator=accelerator, results=results, mode='Test')
+            results = evaluate(model, test_loader, temperature=0.8, ctx=ctx, top_k=top_k, results=results, mode='Test', accelerator=accelerator)
+            results = evaluate_forced(model, test_loader, ctx=ctx, results=results, mode='Test', accelerator=accelerator)
 
             print(results)
             if wandb_log:
