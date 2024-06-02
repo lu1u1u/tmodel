@@ -72,7 +72,7 @@ echo $ep
 # --enable_ae_decoder_emb_grad ：ae decoder的 embd 层会产生梯度
 # --weaken_dec ：ae decoder的输入会全部变为<bos>
 
-logname=pr-paper-KT-suffix-k$k-$modelname-d$deg-p$path-ztokens$ztokens-a$a-b$b-zdim-$zdim-lr$lr
+logname=pr-paper-KT-suffix-k$k-$modelname-d$deg-p$path-lr$lr
 accelerate launch --mixed_precision fp16 --multi_gpu ./distributed_finetune.py \
     --model $modelpath --use_kt --k $k --use_flash_attention \
     --disable_search_unused_parameters \
@@ -81,7 +81,7 @@ accelerate launch --mixed_precision fp16 --multi_gpu ./distributed_finetune.py \
     --n_test 20000 \
     --batch_size $bs \
     --epochs $ep \
-    --eval_every 6 \
+    --eval_every 6000 \
     --dataset graph \
     --deg $deg \
     --path $path \
