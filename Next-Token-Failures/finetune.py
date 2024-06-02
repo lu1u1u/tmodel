@@ -156,6 +156,15 @@ parser.add_argument(
 parser.add_argument(
         "--use_separate",  action = 'store_true', default = False, help = 'use_separate',
     )
+parser.add_argument(
+        "--use_kt",  action = 'store_true', default = False, help = 'use_predict_k_tokens',
+    )
+
+parser.add_argument(
+        "--k", type=int, default=3, help="kt num heads",
+    )
+
+
 
 
 
@@ -184,6 +193,7 @@ class ModelArguments:
     use_ema = args.use_ema
     use_separate = args.use_separate
     m = args.m
+    k = args.k
     msenorm = 1 # 1 : l1; 2 : l2
     
 model_args = ModelArguments()   
@@ -197,6 +207,9 @@ print(f"no_ae = {args.no_ae}")
 print(f"use_ema = {model_args.use_ema}")
 if not args.use_new and args.use_ema:
     print(" => m = ", model_args.m)
+print("use_kt = ", args.use_kt)
+if args.use_kt:
+    print(" => k = ", model_args.k)
 print(f"use_separate = {model_args.use_separate}")
 print("\n")
 
@@ -301,11 +314,22 @@ for ep in range(args.epochs):
             param_group['lr'] = lr
 
         with ctx:
-            logits, loss, accs = model(*tp)
+            if isinstance(tp, list) or isinstance(tp, tuple):
+                logits, loss, accs = model(*tp)
+                bs = tp[0].shape[0]
+                
+            elif isinstance(tp, dict):
+                ret = model(**tp)
+                loss = ret.loss
+                logits = ret.logits
+                accs = ret.acc 
+                bs = tp['input_ids'].shape[0]
+            else:
+                assert 0
 
-        total_ptk_acc.update(accs['token_acc'], tp[0].shape[0])
-        total_loss.update(loss.item(), tp[0].shape[0] * train_data.num_target_tokens)
-        total_acc.update(accs['acc'], tp[0].shape[0] * train_data.num_target_tokens)
+        total_ptk_acc.update(accs['token_acc'], bs)
+        total_loss.update(loss.item(), bs * train_data.num_target_tokens)
+        total_acc.update(accs['acc'], bs * train_data.num_target_tokens)
         scaler.scale(loss).backward()            
         scaler.step(optimizer)
         scaler.update()
