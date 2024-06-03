@@ -168,7 +168,7 @@ class KT(GPT2LMHeadModel):
                 shift_labels.view(-1)
             )
             
-            if self.model_args.k > 1:
+            if self.model_args.k > 1 and self.training:
                 for i in range(self.model_args.k-1):
                     sub_shift_logits = sub_logits[i][..., :-1, :].contiguous()
                     sub_shift_labels = labels[..., 1+i:block_size+i].contiguous()
