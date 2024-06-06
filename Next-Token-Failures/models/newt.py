@@ -604,7 +604,12 @@ class NewTModel(GPT2PreTrainedModel):
         self.m = model_args.m
         self.alpha = model_args.alpha
         self.beta = model_args.beta
-        
+        # for bowloss
+        self.use_bowloss = model_args.use_bowloss
+        self.c = model_args.c 
+        if self.use_bowloss and self.c > 0:
+            self.bceloss = BCEWithLogitsLoss(reduction='sum')
+            
         self.model_args = model_args
         
         self.mseloss = F.smooth_l1_loss if model_args.msenorm == 1 else nn.MSELoss()
@@ -659,7 +664,6 @@ class NewTModel(GPT2PreTrainedModel):
         **kwargs
     ):
 
-        bs = input_ids.size(0)
 
         main_dec_outs = self.main_decoder(
             input_ids = input_ids, 
@@ -670,40 +674,97 @@ class NewTModel(GPT2PreTrainedModel):
 
 
         main_dec_lhs = main_dec_outs.hidden_states[-1] # bs seqlen h
-        #'CausalLMOutputWithCrossAttentions' object has no attribute 'last_hidden_state' 
-
+        
+        # for convenience
+        bs, seqlen, hz = main_dec_lhs.size()
+        
         main_hidden_z = main_dec_lhs[pos_mask]
         main_hidden_z = self.proj(main_hidden_z)
         
-        ae_outs = self.aemodel(
-            input_ids_enc = input_ids_enc,
-            input_ids_enc_z = input_ids_enc_z,
-            labels_enc = labels_enc
-        )
+        mseloss = 0
+        recloss = 0
+        bowloss = 0
+        
+        if self.alpha > 0:
+            ae_outs = self.aemodel(
+                input_ids_enc = input_ids_enc,
+                input_ids_enc_z = input_ids_enc_z,
+                labels_enc = labels_enc
+            )
 
-        #print(main_hidden_z.shape, ae_outs.hidden_z.shape)
-        mseloss = self.mseloss(main_hidden_z.float(), ae_outs.hidden_z.reshape(-1, ae_outs.hidden_z.size(-1)).detach().float())
-
-        recloss = ae_outs.loss
+            #print(main_hidden_z.shape, ae_outs.hidden_z.shape)
+            mseloss = self.mseloss(main_hidden_z.float(), ae_outs.hidden_z.reshape(-1, ae_outs.hidden_z.size(-1)).detach().float())
+            recloss = ae_outs.loss
+            
         nllloss = main_dec_outs.loss
         
-
         tloss = self.alpha * mseloss  \
             + self.beta * recloss  \
             + nllloss 
             
-        
-        print(f"{self.training}; mseloss = {self.alpha} * {mseloss:.6f}, recloss = {self.beta} * {recloss:.6f}, nllloss = {nllloss:.6f}\n")
+        # calculating bowloss
+        if self.use_bowloss and self.c > 0:
+            mhz = main_dec_lhs[pos_mask]
+            mhz = mhz.reshape(bs, -1, hz)
+            mhz = mhz.mean(dim=1) # B H
 
+            logits_bow = self.main_decoder.lm_head(mhz)
+            #logits_bow = F.softmax(logits_bow, dim=1)
+            
+            vocab_size = self.main_decoder.vocab_size
+            
+            bow_target = labels[labels!=-100].reshape(bs,-1)
+            bow_target = F.one_hot(bow_target, num_classes = vocab_size)
+            bow_target = torch.sum(bow_target, dim=1).type(torch.bool).float()
+            
+            bowloss = self.bceloss(logits_bow, bow_target) / bs
+            tloss += self.c * bowloss
+            """
+            if not hasattr(self,"testn"): 
+                self.testn = 0
+            else:
+                self.testn += 1
+                if self.testn > 50000:
+                    assert 0
+            cur = labels[labels!=-100].reshape(bs,-1)
+            outputs = torch.zeros_like(cur).type(torch.float16)
+            for i, r in enumerate(cur):
+                for j, c in enumerate(r):
+                    outputs[i][j] = logits_bow[i][cur[i][j]]
+            torch.set_printoptions(precision=2)
+            print(outputs)
+            """
+        # output res
+        self.output_results(mseloss, recloss, nllloss, bowloss, mode = 'w')
+
+        # get accuracy
         preds = main_dec_outs.logits.argmax(dim=-1)
-        
         preds = preds[:, :-1]
         labels = labels[:,1:]
-        #print(f"preds: {preds[labels != -100]}")
-        #print(f"golds: {labels[labels != -100]}")
         acc = self.accuracy(preds, labels)
+        
         return main_dec_outs.logits, tloss if self.training else nllloss, acc
-
+    
+    def output_results(self, mseloss, recloss, nllloss, bowloss=0, mode='w'):
+        log = (
+            f"{self.training}; "
+            f"mseloss = {self.alpha} * {mseloss:.6f}, "
+            f"recloss = {self.beta} * {recloss:.6f}, "
+            f"nllloss = {nllloss:.6f}, "
+        )
+        if self.use_bowloss and self.c > 0:
+            log += f"bowloss = {self.c} * {bowloss:.6f}"
+        log += '\n'
+        
+        if mode == 'w':
+            with open(f'./nnn530_bll/{self.model_args.spname}.txt', 'a') as f:
+                f.write(log)
+        elif mode == 'p':
+            print(log)
+        else:
+            return
+            
+            
     def accuracy(self, preds, labels):
         bz = labels.size(0)
         #print(labels)
