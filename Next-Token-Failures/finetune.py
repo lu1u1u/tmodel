@@ -93,10 +93,10 @@ parser.add_argument(
         "--ztokens", type=int, default=4, help="ztokens",
     )
 parser.add_argument(
-        "--a", type=int, default=1, help="alpha",
+        "--a", type=float, default=1, help="alpha",
     )
 parser.add_argument(
-        "--b", type=int, default=1, help="beta",
+        "--b", type=float, default=1, help="beta",
     )
 parser.add_argument(
         "--zdim", type=int, default=32, help="zdim",
@@ -163,6 +163,12 @@ parser.add_argument(
 parser.add_argument(
         "--k", type=int, default=3, help="kt num heads",
     )
+parser.add_argument(
+        "--c", type=float, default=1, help="weight for bowloss",
+    )
+parser.add_argument(
+        "--use_bowloss",  action = 'store_true', default = False, help = 'use_bowloss',
+    )
 
 
 
@@ -195,8 +201,10 @@ class ModelArguments:
     weaken_dec = args.weaken_dec
     use_ema = args.use_ema
     use_separate = args.use_separate
+    use_bowloss = args.use_bowloss
     m = args.m
     k = args.k
+    c = args.c # for bowloss
     msenorm = 1 # 1 : l1; 2 : l2
     
 model_args = ModelArguments()   
@@ -214,6 +222,9 @@ print("use_kt = ", args.use_kt)
 if args.use_kt:
     print(" => k = ", model_args.k)
 print(f"use_separate = {model_args.use_separate}")
+print(f"use_bowloss = {model_args.use_bowloss}")
+if model_args.use_bowloss:
+    print("=> c = ", model_args.c)
 print("\n")
 
 print("====================Data Details=====================")
