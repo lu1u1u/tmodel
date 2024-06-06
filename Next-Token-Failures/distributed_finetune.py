@@ -96,10 +96,10 @@ parser.add_argument(
         "--ztokens", type=int, default=4, help="ztokens",
     )
 parser.add_argument(
-        "--a", type=int, default=1, help="alpha",
+        "--a", type=float, default=1, help="alpha",
     )
 parser.add_argument(
-        "--b", type=int, default=1, help="beta",
+        "--b", type=float, default=1, help="beta",
     )
 parser.add_argument(
         "--zdim", type=int, default=32, help="zdim",
@@ -171,6 +171,13 @@ parser.add_argument(
 parser.add_argument(
         "--disable_search_unused_parameters",  action = 'store_true', default = False, help = 'd',
     )
+parser.add_argument(
+        "--c", type=float, default=1, help="weight for bowloss",
+    )
+parser.add_argument(
+        "--use_bowloss",  action = 'store_true', default = False, help = 'use_bowloss',
+    )
+
 args = parser.parse_args()
 
 # Parallel
@@ -203,8 +210,10 @@ class ModelArguments:
     weaken_dec = args.weaken_dec
     use_ema = args.use_ema
     use_separate = args.use_separate
+    use_bowloss = args.use_bowloss
     m = args.m
     k = args.k
+    c = args.c # for bowloss
     msenorm = 1 # 1 : l1; 2 : l2
     
 model_args = ModelArguments()   
@@ -222,6 +231,9 @@ def print_settings():
     if args.use_kt:
         print(" => k = ", model_args.k)
     print(f"use_separate = {model_args.use_separate}")
+    print(f"use_bowloss = {model_args.use_bowloss}")
+    if model_args.use_bowloss:
+        print("=> c = ", model_args.c)
     print("\n")
 
     print("====================Data Details=====================")
