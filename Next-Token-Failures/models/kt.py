@@ -77,7 +77,7 @@ class KT(GPT2LMHeadModel):
         self.lm_head = self.pree.lm_head
         self.sub_heads = nn.ModuleList(
             [
-                nn.Linear(self.config.n_embd, self.config.vocab_size, bias=False)
+                deepcopy(self.lm_head) #nn.Linear(self.config.n_embd, self.config.vocab_size, bias=False)
                 for _ in range(model_args.k-1)
             ]
         )
@@ -171,7 +171,7 @@ class KT(GPT2LMHeadModel):
             if self.model_args.k > 1 and self.training:
                 for i in range(self.model_args.k-1):
                     sub_shift_logits = sub_logits[i][..., :-1, :].contiguous()
-                    sub_shift_labels = labels[..., 1+i:block_size+i].contiguous()
+                    sub_shift_labels = labels[..., 2+i:block_size+i+1].contiguous()
                     loss += loss_fct(
                         sub_shift_logits.view(-1, shift_logits.size(-1)), 
                         sub_shift_labels.view(-1)
