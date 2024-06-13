@@ -82,10 +82,6 @@ class KT(GPT2LMHeadModel):
             ]
         )
         print(self.config)
-        #print(model_args)
-        #print(self)
-        #print(self.sub_heads)
-        self.r_init_weights(self.sub_heads)
         
     def generate(self, *args,**kwargs):
         return self.pree.generate(*args,**kwargs)
@@ -177,7 +173,7 @@ class KT(GPT2LMHeadModel):
                         sub_shift_labels.view(-1)
                     )
             
-        
+            loss = loss / self.model_args.k
             preds = lm_logits.argmax(dim=-1)[:, :-1]
             labels = labels[:,1:block_size]
             acc = self.accuracy(preds, labels)
